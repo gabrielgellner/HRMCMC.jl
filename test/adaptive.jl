@@ -55,16 +55,16 @@ simplex20 = Polytope(zeros(20), ones(20); C = ones(1, 20), d = [1.0])
         @test size(w.points, 2) == 0
         @test w.cache.zpoints === nothing
         chains = sample(Xoshiro(1), w, ACHR(), MCMCSerial(), 500, 3)
-        # The 20 coordinate programs reach 11 distinct vertices of the box
-        @test size(w.cache.zpoints, 2) == size(warmup(skinny; extremes = true).points, 2)
-        # The chains share one set of extreme points, in the slice of the warmup
+        # The 20 coordinate programs reach 11 distinct vertices of the box; the optima of
+        # random objectives bring the points to 2k = 20 or more (#50)
         zp = w.cache.zpoints
+        we = warmup(skinny; extremes = true)
+        @test size(zp, 2) >= 20
+        @test sort(collect(eachcol(we.points))) ≈ sort(collect(eachcol(w.transform * zp[:, 1:size(we.points, 2)] .+ w.center)))
+        # The chains share one set of points, in the slice of the warmup
         @test PolytopeSamplers.extreme_zpoints(w) === zp
         @test all(p -> p in skinny, eachcol(w.transform * zp .+ w.center))
         @test all(x -> x in skinny, eachcol(reduce(hcat, chains)))
-        # Same chains as from a warmup that solved the extreme points up front
-        we = warmup(skinny; extremes = true)
-        @test sort(collect(eachcol(we.points))) ≈ sort(collect(eachcol(w.transform * zp .+ w.center)))
     end
 
     @testset "rounding from samples" begin

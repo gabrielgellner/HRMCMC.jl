@@ -82,20 +82,62 @@ function extreme_points(w::Warmup)
     end
 end
 
-# The extreme points of each coordinate in `z`. A warmup built from the largest inscribed
-# ball has no equalities beyond those of its slice, so the points lie in it.
+# ACHR's warmup points in `z`: the extreme points of each coordinate and, until there are
+# `2k` distinct points, the optima of random linear objectives. A warmup built from the
+# largest inscribed ball has no equalities beyond those of its slice, so the points lie in it.
+#
+# Adapted from the COBRA Toolbox, src/analysis/sampling/ACHR/createHRWarmup.m (commit
+# 67c790d, GPL-3.0), which adds the minimum and maximum of random objectives to the
+# coordinate extremes up to at least `2n` points: where many coordinates reach their bounds
+# at the same vertex, the coordinate extremes alone span too few directions, 238 of 257 on
+# the food web of #33. COBRA also pulls the points toward their mean, as it starts chains at
+# them; chains here start in the inscribed ball, and ACHR's direction is the same either way.
 function extreme_zpoints(w::Warmup)
-    isempty(w.zpoints) || return w.zpoints
     size(w.transform, 2) == 0 && return w.zpoints
-    points = extreme_points(w)
     cache = w.cache
     return lock(cache.lock) do
         if cache.zpoints === nothing
-            cache.zpoints = w.transform \ (points .- w.center)
+            Z = isempty(w.zpoints) ? w.transform \ (extreme_points(w) .- w.center) : w.zpoints
+            cache.zpoints = add_random_optima(w, Z)
         end
         cache.zpoints
     end
 end
+
+function add_random_optima(w::Warmup, Z)
+    k = size(w.transform, 2)
+    S, c = scaled_polytope(w.polytope)
+    s = LPState(S, w.cache.optimizer)
+    to_z(p) = w.transform \ (p ./ c .- w.center)
+    rng = Xoshiro(WARMUP_POINTS_SEED)
+    tries = 0
+    while size(Z, 2) < 2k && tries < k
+        tries += 1
+        r = rand(rng, nvars(S)) .- 0.5
+        for sense in (MAX_SENSE, MIN_SENSE)
+            p = extreme_point!(s, S, w.cache.optimizer, sense, x -> sum(r[j] * x[j] for j in eachindex(r)))
+            p isa Vector{Float64} && (Z = unique([Z to_z(p)]; dims = 2))
+        end
+    end
+    # On a degenerate polytope random objectives keep reaching the same vertices: on the food
+    # web of #33 they took the span from 238 to 245 of 257 directions. Each direction the
+    # points still miss is reached by minimizing and maximizing along it, as
+    # `keep_wide_directions` measures directions in `warmup`.
+    F = svd(Z .- vec(mean(Z; dims = 2)); full = true)
+    missing = F.U[:, (count(>(sqrt(eps()) * F.S[1]), F.S) + 1):end]
+    Tp = isempty(missing) ? w.transform' : pinv(w.transform)
+    for v in eachcol(missing)
+        # `vᵀz` as a function of `x̄ = c .* x`, with `z = T⁺ (x - center)`
+        d = (Tp' * v) ./ c
+        for sense in (MAX_SENSE, MIN_SENSE)
+            p = extreme_point!(s, S, w.cache.optimizer, sense, x -> sum(d[j] * x[j] for j in eachindex(d) if d[j] != 0))
+            p isa Vector{Float64} && (Z = [Z to_z(p)])
+        end
+    end
+    return unique(Z; dims = 2)
+end
+
+const WARMUP_POINTS_SEED = 0x41434852
 
 """
     ranges(P::Polytope; optimizer = HiGHS.Optimizer)

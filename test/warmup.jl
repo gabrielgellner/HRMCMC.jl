@@ -157,8 +157,9 @@ include(joinpath(@__DIR__, "fixtures", "wide_range_foodweb.jl"))
             w = warmup(Q)
             @test all(isapprox.(ranges(w), exact; atol = 1.0e-9))
             @test (w.cache.points === nothing) == (Q === P)
-            @test PolytopeSamplers.extreme_zpoints(w) ≈
-                w.transform \ (PolytopeSamplers.extreme_points(w) .- w.center)
+            # ACHR's points start with the extreme points of each coordinate
+            E = PolytopeSamplers.extreme_points(w)
+            @test PolytopeSamplers.extreme_zpoints(w)[:, 1:size(E, 2)] ≈ w.transform \ (E .- w.center)
         end
         # Samples stay inside the ranges
         lower, upper = ranges(simplex)
