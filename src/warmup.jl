@@ -251,8 +251,15 @@ the variables.
 
 Throws an `ArgumentError` when `P` is empty or unbounded; with `extremes = false` one more
 linear program checks boundedness. A linear program that stops for another reason raises
-an error naming its status. `optimizer` is any JuMP optimizer for linear programs;
-each call builds its own model, so separate tasks may call `warmup` at the same time.
+an error naming its status. After rounding, `warmup` warns when the polytope is wider than
+`1e9` in some coordinate, as one bounded only by a very large bound is (the check of
+PolytopeSamplerMatlab).
+
+`optimizer` is any JuMP optimizer for linear programs. `warmup` sets the feasibility
+tolerances of HiGHS and Gurobi to `1e-9` and warns for other solvers, whose tolerances
+should be set through `optimizer_with_attributes`; each program stops after 600 s unless a
+time limit is set there. Each call builds its own models, so separate tasks may call
+`warmup` at the same time.
 """
 function warmup(
         rng::AbstractRNG, P::Polytope; extremes::Bool = false,
@@ -306,6 +313,7 @@ function warmup(
     end
     zpoints = isempty(T) ? zeros(0, size(points, 2)) : T \ (points .- center)
     radius = isempty(T) ? 0.0 : last(chebyshev_center(G, h, optimizer))
+    rounding === :none || wide_warning(T ./ c, radius)
     return Warmup(
         P, points ./ c, center ./ c, T ./ c, G, h, zpoints, radius, rounding !== :none;
         removed, optimizer,
@@ -379,6 +387,20 @@ function checked_point(p, what)
     p isa String && error("the linear program for $what $p, also on a new model")
     return p
 end
+
+# PolytopeSamplerMatlab warns when an estimated width exceeds 1e9 (code/prepare/Polytope.m,
+# commit f85505c, GPL-3.0), as a polytope bounded only by an artificial bound such as 1e9
+# has one direction that dominates rounding and sampling. After rounding, the inscribed ball
+# of radius `r` maps to an ellipsoid in `x` with extent `r ‖Tᵢ‖` along coordinate `i`, so
+# `2 r ‖Tᵢ‖` is a lower bound on the polytope's width in it.
+function wide_warning(T, radius)
+    widths = 2 * radius .* norm.(eachrow(T))
+    i = argmax(widths)
+    widths[i] > WIDE_WIDTH && @warn "warmup: the polytope is at least $(widths[i]) wide in coordinate $i; it may be bounded only by very large bounds, which slow sampling" maxlog = 1
+    return
+end
+
+const WIDE_WIDTH = 1.0e9
 
 function thin_warning(width, atol)
     @warn "warmup: fixed directions in which the polytope has width up to $(width), below atol = $(atol); its samples do not vary in them. Pass a smaller atol, such as 1e-9, to sample them." maxlog = 1
