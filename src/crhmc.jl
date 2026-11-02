@@ -374,6 +374,7 @@ function step!(rng::AbstractRNG, c::CRHMCState)
     k = length(c.z)
     k == 0 && return update_x!(c)
     if !c.started
+        slacks!(c.s, c, c.z) || move_inside!(c.z, c.s, c.warmup.h)
         metric!(c, c.z) || throw(ArgumentError("the chain must start strictly inside the polytope"))
         refresh_momentum!(rng, c, 0.0)
         c.started = true

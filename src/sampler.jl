@@ -289,6 +289,27 @@ function update_slack!(c)
     return c.slack
 end
 
+# Move `z` toward the warmup center `z = 0` until every slack `s = h - G z` is positive, for
+# samplers whose barrier is infinite on the boundary, so that they accept a start on a face
+# or at a vertex. `z ← (1 - δ) z` gives slacks `δ h + (1 - δ) s`, positive for a small `δ`
+# when `h > 0`. Returns whether `z` moved; the caller then recomputes the slacks.
+function move_inside!(z, slack, h)
+    all(>(0), slack) && return false
+    δ = 1.0e-9
+    while δ < 1
+        δ *= 2
+        inside = true
+        for i in eachindex(slack)
+            inside &= δ * h[i] + (1 - δ) * slack[i] > 0
+        end
+        if inside
+            z .*= 1 - δ
+            return true
+        end
+    end
+    return false
+end
+
 # Recompute the slacks on the first step and every `SLACK_REFRESH` steps after. The first
 # step must recompute, as the chain may start from a state whose `z` was set by hand.
 function refresh_slack!(c)
@@ -405,7 +426,9 @@ Every chain starts at a uniform random point of the largest ball around the warm
 inside the polytope, so the chains of an ensemble start apart, as R̂ in
 [`diagnostics`](@ref) assumes; pass
 `initial_params`, a point of the polytope (a vector of points, one per chain, with an
-ensemble), to choose the start. The chain then discards `discard_initial` steps and keeps
+ensemble), to choose the start. [`DikinWalk`](@ref), [`VaidyaWalk`](@ref) and
+[`CRHMC`](@ref) move a start on the boundary toward the warmup center until it is strictly
+inside, as their barrier is infinite there. The chain then discards `discard_initial` steps and keeps
 every `thinning`-th point. Consecutive points are correlated; check the effective sample
 size with [`diagnostics`](@ref). Given a [`Polytope`](@ref), `sample` calls
 [`warmup`](@ref) once for all chains with the given `extremes` and `rounding`. To run
