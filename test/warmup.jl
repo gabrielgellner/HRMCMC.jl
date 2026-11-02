@@ -1,4 +1,4 @@
-using PolytopeSamplers: Polytope, Warmup, warmup
+using PolytopeSamplers: Polytope, Warmup, ranges, warmup
 using LinearAlgebra: Diagonal, I, norm, rank, svdvals
 using PolytopeSamplers: PolytopeSamplers, BilliardWalk, sample, sample_until_converged
 using Random: Xoshiro
@@ -121,6 +121,42 @@ include(joinpath(@__DIR__, "fixtures", "thin_foodweb.jl"))
         w = warmup(Polytope([0.0, 0.0], [Inf, 1.0]; A = [1.0 -1.0], b = [0.0]))
         @test w.removed == 1
         @test size(w.G, 1) == 3
+    end
+
+    @testset "ranges" begin
+        box = Polytope([-1.0, 0.0, 2.0], [1.0, 3.0, 5.0])
+        @test ranges(box) == ([-1.0, 0.0, 2.0], [1.0, 3.0, 5.0])
+        simplex = Polytope(zeros(3), fill(Inf, 3); A = ones(1, 3), b = [1.0])
+        lower, upper = ranges(simplex)
+        @test lower ≈ zeros(3) atol = 1.0e-9
+        @test upper ≈ ones(3) atol = 1.0e-9
+        # x₃ is fixed by its bounds, and x₁ + x₂ ≤ 1 with x₁ + x₂ ≥ 1 fixes x₁ + x₂ but
+        # neither coordinate; x₄ = x₁ by an equality
+        P = Polytope(
+            [0.0, 0.0, 0.5, 0.0], [1.0, 1.0, 0.5, 1.0];
+            A = [1.0 1.0 0.0 0.0; -1.0 -1.0 0.0 0.0], b = [1.0, -1.0],
+            C = [1.0 0.0 0.0 -1.0], d = [0.0],
+        )
+        lower, upper = ranges(P)
+        @test lower ≈ [0, 0, 0.5, 0] atol = 1.0e-9
+        @test upper ≈ [1, 1, 0.5, 1] atol = 1.0e-9
+        # A warmup with extreme points uses them; one without solves the programs once and
+        # shares them with ACHR. P has an equality that is not written as one, so its default
+        # warmup falls back to extreme points
+        for Q in (box, simplex, P)
+            exact = ranges(Q)
+            @test all(isapprox.(ranges(warmup(Q; extremes = true)), exact; atol = 1.0e-9))
+            w = warmup(Q)
+            @test all(isapprox.(ranges(w), exact; atol = 1.0e-9))
+            @test (w.cache.points === nothing) == (Q === P)
+            @test PolytopeSamplers.extreme_zpoints(w) ≈
+                w.transform \ (PolytopeSamplers.extreme_points(w) .- w.center)
+        end
+        # Samples stay inside the ranges
+        lower, upper = ranges(simplex)
+        X = sample(Xoshiro(1), warmup(simplex), BilliardWalk(), 1000)
+        @test all(lower .- 1.0e-9 .<= minimum(X; dims = 2))
+        @test all(maximum(X; dims = 2) .<= upper .+ 1.0e-9)
     end
 
     @testset "maximum-volume ellipsoid of a box" begin

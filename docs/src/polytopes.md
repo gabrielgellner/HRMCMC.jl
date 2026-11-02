@@ -123,3 +123,26 @@ catch e
     e
 end
 ```
+
+## Coordinate ranges
+
+[`ranges`](@ref) gives the smallest and largest value of each coordinate over the polytope,
+from the `2n` linear programs that minimize and maximize each coordinate (flux variability
+analysis in metabolic modeling). A coordinate whose range is a single value is fixed by
+the constraints, and a narrow range means that they nearly determine it. A warmup built
+with `extremes = true` has the ranges already; another solves the programs once and keeps
+them for later calls and for [`ACHR`](@ref).
+
+```@example polytopes
+lower, upper = ranges(pentagon)
+```
+
+The ranges of samples lie inside these. Near a vertex where the polytope is thin, samples
+can fall well short: in the 10-dimensional simplex each coordinate reaches 1, at a corner
+that holds a tiny fraction of the volume.
+
+```@example polytopes
+simplex10 = Polytope(zeros(10), fill(Inf, 10); A = ones(1, 10), b = [1.0])
+X = sample(Xoshiro(1), warmup(simplex10), BilliardWalk(), 10_000)
+first(ranges(simplex10)[2]), maximum(X[1, :])
+```

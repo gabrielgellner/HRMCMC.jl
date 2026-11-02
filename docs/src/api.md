@@ -12,6 +12,7 @@ isfeasible
 Base.isempty(::Polytope)
 warmup
 Warmup
+ranges
 ```
 
 ## Targets

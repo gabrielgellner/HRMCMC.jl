@@ -16,7 +16,9 @@ use is sampling the interaction strengths of food webs consistent with an equili
   equalities that hold over the polytope (explicit, fixed coordinates, tight inequalities),
   and writes the polytope as `x = center + transform * z`, `G z ≤ h` with unit-norm rows.
   Samplers move in `z`. `WarmupCache` holds values computed on first use and shared by
-  chains under a lock: `G Gᵀ` for the billiard walk and the extreme points for ACHR.
+  chains under a lock: `G Gᵀ` for the billiard walk and the extreme points for `ranges`
+  and ACHR. `ranges` gives each coordinate's minimum and maximum (flux variability
+  analysis).
 - `src/rounding.jl`: the Chebyshev center, the maximum-volume inscribed ellipsoid (adapted
   from volesti and PolyRound), the ellipsoid rounding loop, and rounding from billiard-walk
   samples (the MMCS phases, adapted from volesti).

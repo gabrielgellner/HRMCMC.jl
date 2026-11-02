@@ -22,7 +22,7 @@ export Polytope, isfeasible
 
 include("rounding.jl")
 include("warmup.jl")
-export warmup
+export ranges, warmup
 public Warmup
 
 include("density.jl")

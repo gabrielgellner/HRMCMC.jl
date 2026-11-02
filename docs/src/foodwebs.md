@@ -46,6 +46,15 @@ with all eigenvalues in the left half-plane is the probability that the equilibr
 stable. FoodWebs.jl's `sample_communities` runs the sampling and returns `(A, r, J)` for
 each point.
 
+The [`ranges`](@ref) of the interaction strengths show which ones the equilibrium and the
+constraints nearly determine before any sampling:
+
+```julia
+P = Polytope(communities)
+lower, upper = ranges(P)
+narrowest = sortperm(upper .- lower)[1:5]   # indices of the five narrowest ranges
+```
+
 ## Results
 
 On this web (four chains of 2000 points, `just example constrained_foodweb`):
