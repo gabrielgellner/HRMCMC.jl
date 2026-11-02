@@ -41,6 +41,17 @@ cross_polytope(n) = Polytope(
         @test abs(v.log_volume) < 4 * v.log_stderr
     end
 
+    @testset "ball chord keeps the current point" begin
+        # With |z|² rounded above ρ², the ball's chord along z₁ is the point t = -z₁, which
+        # lies outside the polytope's chord [-0.3, 0.5] when z₁ = 0.4 (#43)
+        tmin, tmax = PolytopeSamplers.ball_chord(-0.3, 0.5, 0.4, 1.0, 1.0 - 0.16 - 1.0e-12)
+        @test tmin <= 0 <= tmax
+        @test -0.3 <= tmin && tmax <= 0.5
+        @test PolytopeSamplers.ball_chord(-0.3, 0.5, 0.4, 1.0, Inf) == (-0.3, 0.5)
+        # Inside the ball, the chord is the intersection
+        @test all(PolytopeSamplers.ball_chord(-2.0, 2.0, 0.0, 0.0, 1.0) .≈ (-1.0, 1.0))
+    end
+
     @testset "single point and errors" begin
         v = volume(Polytope([0.2, 0.7], [0.2, 0.7]))
         @test v.volume == 1
