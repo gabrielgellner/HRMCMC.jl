@@ -388,6 +388,43 @@ function AbstractMCMC.step(
     return transition(c), c
 end
 
+# A chain continued from `initial_state` writes into that state, so `sample` continues each
+# chain from a copy: the user's state stays as it was, and one state passed to several
+# chains of an ensemble gives each chain its own (#69). The copy shares the warmup, the log
+# density and the read-only matrices, and copies the buffers that a step writes.
+function AbstractMCMC.sample(
+        rng::AbstractRNG, model::SamplingModel, method::PolytopeSampler, N_or_isdone;
+        initial_state = nothing, kwargs...,
+    )
+    return invoke(
+        sample, Tuple{AbstractRNG, AbstractModel, AbstractSampler, Any},
+        rng, model, method, N_or_isdone; initial_state = copy_state(initial_state), kwargs...,
+    )
+end
+
+function AbstractMCMC.sample(
+        rng::AbstractRNG, model::SamplingModel, method::PolytopeSampler,
+        ensemble::AbstractMCMCEnsemble, N::Integer, nchains::Integer;
+        initial_state = nothing, kwargs...,
+    )
+    states = initial_state === nothing ? nothing : map(copy_state, initial_state)
+    return invoke(
+        sample,
+        Tuple{AbstractRNG, AbstractModel, AbstractSampler, AbstractMCMCEnsemble, Integer, Integer},
+        rng, model, method, ensemble, N, nchains; initial_state = states, kwargs...,
+    )
+end
+
+copy_state(::Nothing) = nothing
+copy_state(c::T) where {T} = T((copy_field(c, f) for f in fieldnames(T))...)
+
+# Gᵀ, G Gᵀ and the extreme points are shared by the chains of a warmup and never written
+copy_field(c, f) = f in (:Gt, :GG, :zpoints) ? getfield(c, f) : copy_value(getfield(c, f))
+copy_value(x::Array) = copy(x)
+copy_value(d::ZDensity) = ZDensity(d.ℓ, d.warmup, copy(d.x))
+copy_value(d::ZQuadratic) = ZQuadratic(copy_value(d.density), d.Q, d.g, copy(d.Qu))
+copy_value(x) = x
+
 # Samplers may report problems found during their steps here, outside the hot loop
 check_state(c) = c
 
@@ -441,7 +478,8 @@ its `internals` section. `AbstractMCMC.steps` and callbacks receive each point a
 with fields `x` and `stats`.
 
 This is `AbstractMCMC.sample` (also `StatsBase.sample`); its other keyword arguments, such
-as `initial_state` and `callback`, apply.
+as `initial_state` and `callback`, apply. A chain continues from a copy of `initial_state`,
+so the state passed is left as it was and may be passed to several chains.
 
 # Examples
 ```julia
