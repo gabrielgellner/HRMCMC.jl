@@ -121,13 +121,13 @@ end
 # Bounds at or beyond this magnitude are infinite, as for HiGHS
 const INFINITE_BOUND = 1.0e20
 
-# A silent JuMP model. The primal and dual feasibility tolerances are tightened to 1e-9, as
-# PolyRound and hops do for Gurobi (hops, src/hops/LinearProgram/GurobiEnvironmentSingleton.cpp,
-# commit b62592e, MIT), so that solver error does not pass for a direction in which the
-# polytope has width above the `atol` of `warmup`. MathOptInterface has no solver-independent
-# feasibility tolerance, so this names them for HiGHS and Gurobi and warns once for other
-# solvers. Each solve stops after 600 s, PolyRound's limit (default_settings.py), unless the
-# user set a limit, through the solver-independent `TimeLimitSec`.
+# A silent JuMP model. For HiGHS the primal and dual feasibility tolerances are tightened to
+# 1e-9, as PolyRound and hops do for Gurobi (hops, GurobiEnvironmentSingleton.cpp, commit
+# b62592e, MIT), so that solver error does not pass for a direction in which the polytope
+# has width above the `atol` of `warmup`. MathOptInterface has no solver-independent
+# feasibility tolerance, so other solvers get a warning, once, to set theirs. Each solve
+# stops after 600 s, PolyRound's limit (default_settings.py), unless the user set a limit,
+# through the solver-independent `TimeLimitSec`.
 function lp(optimizer)
     model = Model(optimizer)
     set_silent(model)
@@ -135,11 +135,8 @@ function lp(optimizer)
     if name == "HiGHS"
         set_attribute(model, "primal_feasibility_tolerance", LP_TOL)
         set_attribute(model, "dual_feasibility_tolerance", LP_TOL)
-    elseif name == "Gurobi"
-        set_attribute(model, "FeasibilityTol", LP_TOL)
-        set_attribute(model, "OptimalityTol", LP_TOL)
     else
-        @warn "warmup: the feasibility tolerances of $name are left at its defaults; set them to 1e-9 with optimizer_with_attributes, as warmup does for HiGHS and Gurobi, as a coarser tolerance can pass solver error for width below atol" maxlog = 1
+        @warn "warmup: the feasibility tolerances of $name are left at its defaults; set them to 1e-9 with optimizer_with_attributes, as warmup does for HiGHS, as a coarser tolerance can pass solver error for width below atol" maxlog = 1
     end
     time_limit_sec(model) === nothing && set_time_limit_sec(model, LP_TIME_LIMIT)
     return model
