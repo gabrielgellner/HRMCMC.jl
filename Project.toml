@@ -4,7 +4,7 @@ version = "0.3.0"
 authors = ["Gabriel Gellner <gabrielgellner@gmail.com>"]
 
 [workspace]
-projects = ["test", "examples", "docs"]
+projects = ["test", "docs"]
 
 [deps]
 AbstractMCMC = "80f14c24-f653-4e6a-9b94-39d6b0f70001"

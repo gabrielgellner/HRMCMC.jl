@@ -13,6 +13,7 @@ default:
 setup:
     {{ julia }} -e 'using Pkg; Pkg.Apps.add("Runic"); Pkg.Apps.add(url = "https://github.com/aviatesk/JETLS.jl", rev = "release")'
     {{ julia }} --project -e 'using Pkg; Pkg.instantiate()'
+    {{ julia }} --project=examples -e 'using Pkg; Pkg.instantiate()'
 
 # Format all Julia files in place with Runic
 fmt:
@@ -44,8 +45,9 @@ ci: fmt-check lint test
 
 # Run the tests in a copy of the repository without its manifests, so that every environment
 # is resolved from scratch as on CI and for users; this catches compat bounds that a local
-# manifest hides, as a FoodWebs bound did in #82. Run it before a release or after changing
-# a dependency or a compat entry.
+# manifest hides. Run it before a release or after changing a dependency or a compat entry.
+# The examples are outside the workspace, so this does not resolve FoodWebs, whose compat
+# bound failed the release of #82.
 ci-fresh:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -53,7 +55,7 @@ ci-fresh:
     trap 'rm -rf "$tmp"' EXIT
     git ls-files -co --exclude-standard | rsync -a --files-from=- . "$tmp"
     cd "$tmp"
-    {{ julia }} --project=examples -e 'using Pkg; Pkg.instantiate()'
+    {{ julia }} --project -e 'using Pkg; Pkg.instantiate()'
     {{ julia }} --project -e 'using Pkg; Pkg.test()'
 
 # ── Release ───────────────────────────────────────────────────────────────────

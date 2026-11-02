@@ -64,8 +64,11 @@ use is sampling the interaction strengths of food webs consistent with an equili
   `docs/src/` run their `@example` blocks at build time, so a stale example fails the
   build; `checkdocs = :exports` fails it when an exported name is missing from `api.md`.
   Update the benchmark tables in `samplers.md` when a sampler's performance changes.
-- `examples/`: worked problems, as a workspace project (FoodWebs.jl from GitHub, pinned to
-  a release tag): `foodweb_study.jl` holds the settings of the original study (constraints,
+- `examples/`: worked problems, as a separate project outside the workspace, with
+  FoodWebs.jl from GitHub pinned to a release tag and this package by path. `just ci`, CI
+  and the docs never resolve FoodWebs, so a release of this package does not wait for a
+  FoodWebs release whose compat allows it; move the pin once FoodWebs has one.
+  `foodweb_study.jl` holds the settings of the original study (constraints,
   pyramid biomasses), `constrained_foodweb.jl` compares the samplers on one web,
   `foodweb_replicates.jl` runs many webs in parallel threads. FoodWebs.jl builds the food
   web polytope (`FeasibleCommunities`). Food web code may live here; move it to FoodWebs.jl
