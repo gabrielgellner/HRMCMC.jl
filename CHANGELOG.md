@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-11-02
+
+### Breaking Changes
+
+- **warmup**: Remove redundant bounds and inequalities by default (`prune = true`); pass `prune = false` to keep them, as for polytopes with a dense `A`, where the linear programs are slow (#35)
+- **warmup**: Default `atol` to `1e-8` (was `1e-6`), so that directions as thin as `1e-7` are sampled instead of fixed (#31)
+- **diagnostics**: Report the rank-normalized R̂, which also compares the spread of the chains; `sample_until_converged` stops on it (#44)
+- **density**: Throw when a chain starts where the density is zero, infinite or NaN (#70)
+- **billiard**: Set the default trajectory length on unrounded warmups by burn-in instead of `2√k r` (#71)
+- **polytope**: Reject infinite or NaN constraints, and treat bounds of `1e20` or more as infinite, as HiGHS does (#83)
+
+### Features
+
+- **warmup**: Add `ranges`, the smallest and largest value of each coordinate over a polytope (#34)
+- **warmup**: Report the number of redundant constraints removed in `w.removed` and `show` (#35)
+- **density**: Report slice updates that give up in `getstats` as `n_exhausted` (#70)
+- **billiard**: Report abandoned trajectories in `getstats` as `is_abandoned`, and warn when more than 5% of a chain's steps are abandoned (#71)
+
+### Performance
+
+- **warmup**: Run the `:samples` rounding phases on one chain per thread, continuing each chain from its last point (#36)
+- **warmup**: Keep `:samples` rounding going on skinny polytopes and draw fewer points in early phases; on a food web with 1082 variables the `:samples` warmup takes 290 s instead of 86 min (#45, #37, #33)
+
+### Bug Fixes
+
+- **warmup**: Rescale the variables by geometric-mean scaling before the linear programs and rounding, so that polytopes whose coefficients span many orders of magnitude, such as food webs with biomasses from `1e-3` to `1e3`, warm up (#83)
+- **warmup**: Check every linear program's result, retry failed programs, drop dependent equality rows, and guard ellipsoid and `:samples` rounding as PolyRound, PolytopeSamplerMatlab, volesti and hops do (#83)
+- **density**: Keep chains moving on densities that diverge at a face (#29)
+- **density**: Keep truncated-normal chord draws inside the chord when the mode lies far away (#42)
+- **warmup**: Keep the center inside the polytope when fixing thin directions, and report fixed coordinates (#31)
+- **warmup**: Measure constraint tolerances in units of x and report an empty polytope when an equality violates a bound (#40)
+- **warmup**: Find every direction of the polytope with extremes = true (#39)
+- **warmup**: Fix bounds within atol at their midpoint, report solver failures by status and retry them once (#72)
+- **sampler**: Start chains inside the polytope after rounding or with extreme points (#38)
+- **sampler**: Run the vertex-start test and start barrier walks and CRHMC from boundary points (#41)
+- **sampler**: Continue chains from a copy of initial_state, so one state can start several chains (#69)
+- **volume**: Keep the current point in the ball chord and fail on a zero ratio (#43)
+- **rounding**: Warn when ellipsoid rounding stops because the ellipsoid cannot be factored (#73)
+
+### Documentation
+
+- **sampler**: State that a HitAndRun step is one move and a CoordinateHitAndRun step is k (#56)
+
 ## [0.1.0] - 2026-11-01
 
 ### Breaking Changes
