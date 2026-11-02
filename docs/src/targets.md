@@ -35,11 +35,23 @@ r = sample_until_converged(Xoshiro(3), t, CoordinateHitAndRun(); target_ess = 2_
 r.diagnostics.mean, r.diagnostics.mcse_mean
 ```
 
-`GaussianTarget` also stretches the chains' coordinates in each direction where the
-Gaussian is narrower than the polytope, as hops samples truncated Gaussians in coordinates
-whitened by `Σ` (`whiten = false` turns this off). A narrow, correlated Gaussian is then
-round where the chains move: with correlation 0.99 on `[-10, 10]²`, coordinate hit-and-run
-reached a minimum ESS of 8313 from 4 chains of 2000 sweeps, against 64 unwhitened.
+With `whiten = true`, `GaussianTarget` stretches the chains' coordinates in each direction
+where the Gaussian is narrower than the polytope, as hops samples truncated Gaussians in
+coordinates whitened by `Σ`; directions where the Gaussian is wider are left as they are.
+Coordinate hit-and-run, smallest effective sample size of 4 chains (2000 sweeps each on the
+boxes, 20 000 on the food web):
+
+| Gaussian | not whitened | whitened | fully whitened (hops) |
+|---|---|---|---|
+| correlation 0.99 on `[-10, 10]²` | 67 | 7 797 | 7 797 |
+| σ 100 and 0.05 at 45° on `[0, 10]²` | 19 | 7 765 | 7 765 |
+| σ 50 and 20 on `[0, 1]²` (wider than the box) | 7 847 | 7 847 | 6 947 |
+| σ from 0.01 to 10 on `[0, 1]¹⁰` | 31 | 4 342 | 4 265 |
+| food web, 282 variables, σ a fifth of each coordinate's range | 1 019 | 729 | 770 |
+
+Whitening helps a correlated Gaussian that lies mostly inside the polytope. On the food web,
+where the constraints shape the target more than the Gaussian does, stretching the
+coordinates elongates the polytope and slows the chains, so it is off by default.
 
 On a 10-dimensional box, coordinate hit-and-run gave 6 times the effective samples per
 second of slice sampling on the same Gaussian, and 13 times on an exponential density;

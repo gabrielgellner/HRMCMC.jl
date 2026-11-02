@@ -78,8 +78,8 @@ function LogDensityProblems.logdensity_and_gradient(d::FunctionLogDensity, x)
 end
 
 """
-    GaussianTarget(w::Warmup, μ, Σ; whiten = true)
-    GaussianTarget(P::Polytope, μ, Σ; whiten = true, kwargs...)
+    GaussianTarget(w::Warmup, μ, Σ; whiten = false)
+    GaussianTarget(P::Polytope, μ, Σ; whiten = false, kwargs...)
 
 The Gaussian distribution with mean `μ` and covariance `Σ` (a positive definite matrix)
 restricted to the polytope: a [`Target`](@ref) with `ℓ(x) = -(x - μ)ᵀ Σ⁻¹ (x - μ) / 2`.
@@ -91,10 +91,13 @@ take densities use `ℓ` and its gradient as for any target.
 
 With `whiten = true`, the coordinates of the warmup are stretched in each direction where the
 Gaussian is narrower than the polytope's inscribed ball, until it is as wide as the ball, as
-hops samples truncated Gaussians in coordinates whitened by `Σ`. A narrow, correlated
-Gaussian is then round in the coordinates the chains move in, and so is the polytope where
-the Gaussian is wide. On `[-10, 10]²` with correlation 0.99, `CoordinateHitAndRun` had a
-lag-1 autocorrelation near 0.98 per sweep without whitening.
+hops samples truncated Gaussians in coordinates whitened by `Σ`. Use it for a narrow,
+correlated Gaussian that lies mostly inside the polytope: with correlation 0.99 on
+`[-10, 10]²`, `CoordinateHitAndRun` reached a minimum ESS of 7797 from 4 chains of 2000
+sweeps whitened, against 67 without. Where the constraints shape the target more than the
+Gaussian does it is slower: on a food web with 282 variables and `σ` a fifth of each
+coordinate's range, the minimum ESS from 4 chains of 20 000 sweeps was 729 whitened against
+1019 without, so it is off by default.
 
 # Examples
 ```julia
@@ -103,7 +106,7 @@ t = GaussianTarget(box, [0.5, 0.0], [1.0 0.8; 0.8 1.0])
 r = sample_until_converged(Xoshiro(1), t, CoordinateHitAndRun())
 ```
 """
-function GaussianTarget(w::Warmup, μ::AbstractVector{<:Real}, Σ::AbstractMatrix{<:Real}; whiten::Bool = true)
+function GaussianTarget(w::Warmup, μ::AbstractVector{<:Real}, Σ::AbstractMatrix{<:Real}; whiten::Bool = false)
     n = nvars(w.polytope)
     length(μ) == n || throw(DimensionMismatch("μ has length $(length(μ)), the polytope has $n variables"))
     size(Σ) == (n, n) || throw(DimensionMismatch("Σ must be $n×$n, got $(size(Σ))"))
@@ -114,7 +117,7 @@ function GaussianTarget(w::Warmup, μ::AbstractVector{<:Real}, Σ::AbstractMatri
     return Target(w, QuadraticLogDensity(Qx, Vector{Float64}(μ), zeros(n)))
 end
 
-function GaussianTarget(P::Polytope, μ, Σ; whiten::Bool = true, kwargs...)
+function GaussianTarget(P::Polytope, μ, Σ; whiten::Bool = false, kwargs...)
     return GaussianTarget(warmup(P; kwargs...), μ, Σ; whiten)
 end
 

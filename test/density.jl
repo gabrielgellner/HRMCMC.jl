@@ -269,16 +269,17 @@ end
     @testset "whitened Gaussian targets" begin
         # Correlation 0.99 on [-10, 10]²: CHRR had a minimum ESS of 64 and R̂ 1.09 from 4 chains
         # of 2000 sweeps in the polytope's coordinates; whitened, as hops samples truncated
-        # Gaussians (#52), the Gaussian is round in the chain's coordinates
+        # Gaussians (#52), the Gaussian is round in the chain's coordinates. Whitening is off
+        # by default, as it slowed sampling on a food web (see the docstring)
         box = Polytope(fill(-10.0, 2), fill(10.0, 2))
         Σ = [1.0 0.99; 0.99 1.0]
-        t = GaussianTarget(box, zeros(2), Σ)
+        t = GaussianTarget(box, zeros(2), Σ; whiten = true)
         d = diagnostics(sample(Xoshiro(1), t, CoordinateHitAndRun(), MCMCSerial(), 2000, 4; progress = false))
         @test d.min_ess > 2000
         @test d.max_rhat < 1.01
         @test moments_match(d, zeros(2), ones(2))
         # Directions where the Gaussian is wider than the polytope are not stretched
-        wide = GaussianTarget(Polytope(zeros(2), ones(2)), [0.5, 0.5], Matrix(100.0I(2)))
+        wide = GaussianTarget(Polytope(zeros(2), ones(2)), [0.5, 0.5], Matrix(100.0I(2)); whiten = true)
         @test wide.warmup.transform ≈ warmup(Polytope(zeros(2), ones(2))).transform
     end
 
