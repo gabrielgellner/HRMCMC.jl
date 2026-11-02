@@ -164,19 +164,25 @@ function round_polytope!(center, T, G, h; optimizer, maxiter::Integer = 20, max_
     r > 0 || throw(ArgumentError("the polytope has no interior in its span"))
     shift!(center, T, G, h, c)
     reg = 1.0e-3
-    for _ in 1:maxiter
+    ratio = Inf # squared axis ratio of the last ellipsoid mapped to the ball
+    for round in 1:maxiter
         E2, c, converged = max_volume_ellipsoid(G, h, zeros(k); reg)
         λ = eigvals(Symmetric(E2))
-        λ[1] > 0 || break
         F = cholesky(Symmetric(inv(Symmetric(E2)) + 1.0e-8 * I); check = false)
-        issuccess(F) || break
+        if !(λ[1] > 0 && issuccess(F))
+            @warn "warmup: ellipsoid rounding stopped in round $round, as the ellipsoid could not be factored; " *
+                (round == 1 ? "the polytope is not rounded. " : "the last ellipsoid mapped to the ball had axis ratio $(sqrt(ratio)). ") *
+                "Chains may mix slowly; try rounding = :samples."
+            break
+        end
+        ratio = λ[end] / λ[1]
         shift!(center, T, G, h, c)
         L = F.L
         T .= T * L
         G .= G * L
         normalize_rows!(G, h)
         reg = max(reg / 10, 1.0e-10)
-        (λ[end] / λ[1] <= max_ratio && converged) && break
+        (ratio <= max_ratio && converged) && break
     end
     return center, T, G, h
 end
