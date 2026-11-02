@@ -78,6 +78,17 @@ const fast_methods = filter(m -> !(m isa Union{DikinWalk, VaidyaWalk}), methods)
         @test allunique(firsts)
     end
 
+    @testset "random starts lie inside" begin
+        # The center z = 0 of these warmups is not the center of the largest inscribed ball,
+        # so starts drawn in a ball of the Chebyshev radius fell outside the triangle (#38)
+        triangle = Polytope([0.0, 0.0], [1.0, 1.0]; A = [1.0 1.0], b = [1.0])
+        for extremes in (false, true), rounding in (:none, :ellipsoid, :samples)
+            w = warmup(Xoshiro(1), triangle; extremes, rounding)
+            starts = [PolytopeSamplers.start_state(HitAndRun(), w, Xoshiro(s)).z for s in 1:2000]
+            @test all(z -> all(w.G * z .< w.h), starts)
+        end
+    end
+
     @testset "chain starts on a slice ($m)" for m in methods
         # x₁ + x₂ = 1 in the unit square, with x₃ fixed at 0.5
         P = Polytope([0.0, 0.0, 0.5], [1.0, 1.0, 0.5]; C = [1.0 1.0 0.0], d = [1.0])

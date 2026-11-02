@@ -36,6 +36,13 @@ using Statistics: mean
         @test diagnostics(chains).max_rhat > 1.1
     end
 
+    @testset "detects chains that differ in spread" begin
+        # Two chains on [-1, 1] and two on [-3, 3]: same center, so the bulk R̂ is near 1,
+        # and the tail R̂ flags them (#44)
+        chains = [s .* (2 .* rand(Xoshiro(seed), 1, 1000) .- 1) for (seed, s) in zip(1:4, (1, 1, 3, 3))]
+        @test diagnostics(chains).max_rhat > 1.05
+    end
+
     @testset "constant coordinates" begin
         w = warmup(Polytope([0.0, 0.5, 0.0], [1.0, 0.5, 1.0]))
         chains = sample(Xoshiro(1), w, HitAndRun(), MCMCSerial(), 500, 2; thinning = 5)

@@ -148,6 +148,8 @@ end
 # proposal scales and the Metropolis ratio. The proposal solves `U y = ξ` for the upper
 # factor `H = UᵀU`, so that it has covariance `H⁻¹`; polytopewalk solves with the lower
 # factor `L = Uᵀ`, which gives covariance `L⁻¹L⁻ᵀ` while its Metropolis ratio assumes `H⁻¹`.
+# hops also solves with the lower factor (DikinProposal.hpp), but its ratio uses the same
+# metric `LᵀL`, so hops is a valid chain whose metric is not the Dikin ellipsoid.
 # Like polytopewalk, and unlike volesti, the chain is not lazy.
 function step!(rng::AbstractRNG, c::BarrierState)
     k = length(c.z)
@@ -155,6 +157,7 @@ function step!(rng::AbstractRNG, c::BarrierState)
     w = c.warmup
     if !c.ready
         update_slack!(c)
+        move_inside!(c.z, c.slack, w.h) && update_slack!(c)
         c.logdet = factor_hessian!(c.U, c, c.slack)
         isfinite(c.logdet) || throw(ArgumentError("the chain must start strictly inside the polytope"))
         c.logp = logdensity_or_zero(c.density, c.z)

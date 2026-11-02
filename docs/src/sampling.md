@@ -67,15 +67,17 @@ d = diagnostics(chains)
 ```
 
 - `ess`: the effective sample size, the number of independent draws the chain is worth.
-- `rhat`: split-R̂ (Vehtari et al. 2021), which compares the chains with each other and
-  with themselves; values above 1.01 mean the chains have not converged.
+- `rhat`: the rank split-R̂ (Vehtari et al. 2021), which compares the chains with each
+  other and with themselves, in location and in spread; values above 1.01 mean the chains
+  have not converged.
 - `mean`, `std` and their Monte Carlo standard errors `mcse_mean`, `mcse_std`: report
   estimates with these as error bars.
 
 R̂ needs several chains that start in different places. [`sample`](@ref) starts each chain
-at a uniform random point of the largest ball inside the polytope, or at the point given by
-`initial_params` (one per chain with an ensemble). A single chain can look converged while
-it has explored only part of the polytope, so run at least four.
+at a uniform random point of the largest ball around the warmup center inside the
+polytope, or at the point given by `initial_params` (one per chain with an ensemble). A
+single chain can look converged while it has explored only part of the polytope, so run at
+least four.
 
 ## Sampling until converged
 
@@ -87,10 +89,10 @@ r = sample_until_converged(Xoshiro(2), w, CoordinateHitAndRun(); target_ess = 2_
 (; r.converged, r.n, r.diagnostics.min_ess, r.diagnostics.max_rhat)
 ```
 
-Chains start at random points inside the largest ball in the polytope, each with its own
-random number generator seeded from `rng`, so the result does not depend on the number of
-threads. When the chains have not converged by `max_n` points, `converged` is `false` and
-a warning is logged.
+Chains start at random points of the largest ball around the warmup center inside the
+polytope, each with its own random number generator seeded from `rng`, so the result does
+not depend on the number of threads. When the chains have not converged by `max_n`
+points, `converged` is `false` and a warning is logged.
 
 [`mmcs`](@ref) runs multiphase Monte Carlo sampling: a one-program warmup with rounding from
 samples, then billiard-walk chains until convergence.

@@ -87,7 +87,8 @@ skinny_cube(d) = Polytope([-100.0; fill(-1.0, d - 1)], [100.0; fill(1.0, d - 1)]
 
     @testset "chains started at a vertex stay inside ($m)" for m in all_methods
         P = Polytope(fill(-1.0, 3), fill(1.0, 3))
-        w = warmup(P)
+        w = warmup(P; extremes = true)
+        @test !isempty(w.zpoints) # the loop below ran on no points before #41
         for j in axes(w.zpoints, 2)
             state = PolytopeSamplers.chain_state(m, w)
             state.z .= w.zpoints[:, j]

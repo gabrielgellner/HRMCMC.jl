@@ -1,5 +1,5 @@
 using PolytopeSamplers: Polytope, Warmup, warmup
-using LinearAlgebra: Diagonal, I, norm, svdvals
+using LinearAlgebra: Diagonal, I, norm, rank, svdvals
 using PolytopeSamplers: PolytopeSamplers, BilliardWalk, sample, sample_until_converged
 using Random: Xoshiro
 using Test: @test_logs
@@ -11,6 +11,10 @@ include(joinpath(@__DIR__, "fixtures", "thin_foodweb.jl"))
     @testset "errors" begin
         @test_throws ArgumentError warmup(Polytope([0.0, 0.0], [1.0, 1.0]; A = [-1.0 -1.0], b = [-3.0]))
         @test_throws ArgumentError warmup(Polytope([0.0, 0.0], [1.0, Inf]))
+        # The equality puts x₁ above its upper bound (#40)
+        empty = Polytope([0.0, 0.0], [1.0, 1.0]; C = [1.0 0.0], d = [2.0])
+        @test_throws ArgumentError warmup(empty)
+        @test_throws ArgumentError warmup(empty; extremes = true)
         @test_throws ArgumentError warmup(Polytope([0.0, 0.0], [1.0, Inf]); extremes = true)
         # Unbounded with a bounded inscribed ball: the strip 0 ≤ x1 - x2 ≤ 1
         @test_throws ArgumentError warmup(Polytope(fill(-Inf, 2), fill(Inf, 2); A = [1.0 -1.0; -1.0 1.0], b = [1.0, 0.0]))
@@ -106,6 +110,26 @@ include(joinpath(@__DIR__, "fixtures", "thin_foodweb.jl"))
         wq = warmup(Q)
         @test size(wq.transform, 2) == 1
         @test all(iszero, wq.transform[2, :])
+        # The scale of a row does not decide whether it holds with equality (#40):
+        # 1e-9 x₁ ≤ 0.5e-9 leaves x₁ a range of 0.5, and 1e6 (x₁ + x₂) = 1e6 as two
+        # inequalities leaves a segment
+        small = Polytope([0.0, 0.0], [1.0, 1.0]; A = [1.0e-9 0.0], b = [0.5e-9])
+        large = Polytope([0.0, 0.0], [1.0, 1.0]; A = [1.0e6 1.0e6; -1.0e6 -1.0e6], b = [1.0e6, -1.0e6])
+        for extremes in (false, true)
+            @test size(warmup(small; extremes).transform, 2) == 2
+            @test size(warmup(large; extremes).transform, 2) == 1
+        end
+    end
+
+    @testset "extreme points that miss a direction" begin
+        # The triangle with vertices (0, 0), (1, 1) and (0.5, 0.4) has every coordinate
+        # extreme at the first two, where x₂ ≤ x₁ is tight; extremes = true sampled the
+        # segment between them (#39)
+        P = Polytope([0.0, 0.0], [1.0, 1.0]; A = [-1.0 1.0; 0.8 -1.0; 1.2 -1.0], b = [0.0, 0.0, 0.2])
+        w = warmup(P; extremes = true)
+        @test size(w.transform, 2) == 2
+        @test rank(w.points .- w.points[:, 1]) == 2
+        @test all(p -> p in P, eachcol(w.points))
     end
 
     @testset "a single point" begin

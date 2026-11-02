@@ -69,6 +69,7 @@ function volume(
     converged = true
     for i in 1:(length(radii) - 1)
         r, se, ok = body_ratio(rng, w, radii[i], radii[i + 1], r_in; target, nchains, n, max_n)
+        r > 0 || throw(ErrorException("volume: no point of phase $i fell in the next ball after $max_n points per chain; raise max_n"))
         push!(ratios, r)
         log_volume -= log(r)
         variance += (se / r)^2
@@ -254,6 +255,15 @@ function BallChain(rng, w::Warmup, ρ, r_in)
     return BallChain(rng, w, z, w.h .- w.G * z, ρ^2, sum(abs2, z), 0)
 end
 
+# The polytope's chord `[tmin, tmax]` along coordinate `j` cut by the ball `|z|² ≤ ρ²`. The
+# interval keeps `t = 0`: rounding can put `|z|²` above `ρ²`, where the ball's chord shrinks
+# to `t = -zⱼ`, which may lie outside the polytope's chord
+function ball_chord(tmin, tmax, zj, norm2, radius2)
+    isfinite(radius2) || return tmin, tmax
+    s = sqrt(max(zj^2 - norm2 + radius2, 0.0))
+    return min(max(tmin, -zj - s), 0.0), max(min(tmax, -zj + s), 0.0)
+end
+
 function sweep!(c::BallChain)
     w = c.warmup
     z = c.z
@@ -265,11 +275,7 @@ function sweep!(c::BallChain)
     c.norm2 = sum(abs2, z)
     for j in eachindex(z)
         g = view(w.G, :, j)
-        tmin, tmax = chord(c.slack, g)
-        if isfinite(c.radius2)
-            s = sqrt(max(z[j]^2 - c.norm2 + c.radius2, 0.0))
-            tmin, tmax = max(tmin, -z[j] - s), min(tmax, -z[j] + s)
-        end
+        tmin, tmax = ball_chord(chord(c.slack, g)..., z[j], c.norm2, c.radius2)
         t = uniform(c.rng, tmin, tmax)
         c.norm2 += t * (2 * z[j] + t)
         z[j] += t

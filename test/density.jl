@@ -164,6 +164,16 @@ end
         @test abs(mean(z) - (1 / 2 + 1 / (exp(2) - 1))) < 0.003
         z = [PolytopeSamplers.draw_quadratic(rng, 0.0, 0.0, -1.0, 3.0) for _ in 1:100_000]
         @test abs(mean(z) - 1) < 0.02
+        # Modes far outside the chord, where m + σ z cancelled to one value outside the chord
+        # (#42): the density is close to an exponential with rate b near tmin, or near tmax
+        # for negative b
+        for (a, b) in [(2.0e-12, 1.0e3), (1.0e-6, 1.0e2), (2.0e-12, -1.0e3), (1.0e-6, -1.0e2)]
+            z = [PolytopeSamplers.draw_quadratic(rng, a, b, 0.0, 1.0) for _ in 1:100_000]
+            @test all(t -> 0 <= t <= 1, z)
+            @test allunique(z[1:100])
+            dist = b > 0 ? mean(z) : 1 - mean(z)
+            @test abs(dist * abs(b) - 1) < 0.02
+        end
     end
 
     @testset "GaussianTarget and ExponentialTarget" begin
