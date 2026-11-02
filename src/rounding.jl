@@ -168,8 +168,9 @@ function round_polytope!(center, T, G, h; optimizer, maxiter::Integer = 20, max_
     for round in 1:maxiter
         E2, c, converged = max_volume_ellipsoid(G, h, zeros(k); reg)
         λ = eigvals(Symmetric(E2))
-        F = cholesky(Symmetric(inv(Symmetric(E2)) + 1.0e-8 * I); check = false)
-        if !(λ[1] > 0 && issuccess(F))
+        # A singular E2 has no inverse to factor
+        F = λ[1] > 0 ? cholesky(Symmetric(inv(Symmetric(E2)) + 1.0e-8 * I); check = false) : nothing
+        if F === nothing || !issuccess(F)
             @warn "warmup: ellipsoid rounding stopped in round $round, as the ellipsoid could not be factored; " *
                 (round == 1 ? "the polytope is not rounded. " : "the last ellipsoid mapped to the ball had axis ratio $(sqrt(ratio)). ") *
                 "Chains may mix slowly; try rounding = :samples."
