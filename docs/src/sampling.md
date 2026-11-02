@@ -67,8 +67,9 @@ d = diagnostics(chains)
 ```
 
 - `ess`: the effective sample size, the number of independent draws the chain is worth.
-- `rhat`: split-R̂ (Vehtari et al. 2021), which compares the chains with each other and
-  with themselves; values above 1.01 mean the chains have not converged.
+- `rhat`: the rank split-R̂ (Vehtari et al. 2021), which compares the chains with each
+  other and with themselves, in location and in spread; values above 1.01 mean the chains
+  have not converged.
 - `mean`, `std` and their Monte Carlo standard errors `mcse_mean`, `mcse_std`: report
   estimates with these as error bars.
 
