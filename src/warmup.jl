@@ -288,20 +288,9 @@ function scaled_coordinate_extremes(P::Polytope, optimizer)
     check_feasible(s.model)
     n = nvars(P)
     points = Matrix{Float64}(undef, n, 2n)
-    found = 0
     for i in 1:n, (k, sense) in enumerate((MIN_SENSE, MAX_SENSE))
-        # A point found earlier that sits at the bound of coordinate `i` is its extreme, so
-        # its program is skipped; on food webs most coordinates have a lower bound of 0
-        bound = sense == MIN_SENSE ? P.lower[i] : P.upper[i]
-        j = isfinite(bound) ? findfirst(c -> points[i, c] == bound, 1:found) : nothing
-        p = if j === nothing
-            what = "the $(sense == MIN_SENSE ? "minimum" : "maximum") of coordinate $i"
-            checked_point(extreme_point!(s, P, optimizer, sense, x -> x[i]), what)
-        else
-            points[:, j]
-        end
-        found += 1
-        points[:, found] = p
+        what = "the $(sense == MIN_SENSE ? "minimum" : "maximum") of coordinate $i"
+        points[:, 2(i - 1) + k] = checked_point(extreme_point!(s, P, optimizer, sense, x -> x[i]), what)
     end
     return unique(points; dims = 2)
 end
@@ -552,9 +541,13 @@ function implicit_equalities(G, h, optimizer)
     model = lp(optimizer)
     y = @variable(model, [1:k])
     t = @variable(model, [1:m], lower_bound = 0, upper_bound = 1)
-    θ = @variable(model, lower_bound = 1, upper_bound = 1 / (2 * THIN_TOL))
+    Θ = 1 / (2 * THIN_TOL)
+    θ = @variable(model, lower_bound = 1, upper_bound = Θ)
     @constraint(model, G * y .+ t .<= θ .* h)
-    @objective(model, MAX_SENSE, sum(t))
+    # Nothing else holds `θ` down, and the simplex left it at its bound of 5e7, where the
+    # solver's accuracy in `y` made the point infeasible; a cost of at most 1/4 keeps it as
+    # small as the rows need without changing which rows reach `t = 1`
+    @objective(model, MAX_SENSE, sum(t) - θ / (4Θ))
     solve!(model)
     is_solved_and_feasible(model) ||
         error("the implicit-equality linear program stopped with status $(termination_status(model))")
