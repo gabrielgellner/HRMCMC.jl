@@ -42,7 +42,7 @@ end
 # Zhang, Y. & Gao, L. (2003). On numerical solution of the maximum volume ellipsoid problem.
 # SIAM Journal on Optimization 14, 53–76. <https://doi.org/10.1137/S1052623401397230>
 """
-    max_volume_ellipsoid(A, b, x0; reg, maxiter = 500, tol = 1e-6)
+    max_volume_ellipsoid(A, b, x0; reg, maxiter = 150, tol = 1e-6)
 
 The maximum-volume ellipsoid inscribed in `{x : A x ≤ b}` by Zhang's primal-dual
 interior-point method, started from the interior point `x0`. Returns
@@ -57,8 +57,16 @@ ellipsoid stays inscribed; it is inscribed in the polytope itself only when `dis
 is 0.
 `failed` is true when the ellipsoid's matrix could not be factored, which ends the
 iteration with `E2` unusable.
+
+As in PolyRound, a solve stops after `maxiter = 150` iterations, and after 10 while
+`reg > 1e-6`: the early rounds of `round_polytope!` only need a rough ellipsoid, as the
+next round starts from the rounded polytope. The change of the objective is tested every 10
+iterations, so a single short step does not pass for convergence. The Newton system is
+symmetric positive definite (a Schur product plus a positive diagonal) and is factored by
+Cholesky, as in PolyRound, at half the cost of LU; `Q = A E2⁻¹ Aᵀ` comes from one
+triangular solve `W = A / U` and the symmetric product `W Wᵀ`.
 """
-function max_volume_ellipsoid(A, b, x0; reg::Real, maxiter::Integer = 500, tol::Real = 1.0e-6)
+function max_volume_ellipsoid(A, b, x0; reg::Real, maxiter::Integer = 150, tol::Real = 1.0e-6)
     m, n = size(A)
     minmu = 1.0e-8
     tau0 = 0.75
@@ -80,14 +88,16 @@ function max_volume_ellipsoid(A, b, x0; reg::Real, maxiter::Integer = 500, tol::
     failed = false
     E2 = zeros(n, n)
     for i in 1:maxiter
-        E2 = A' * (y .* A)
+        Ay = sqrt.(y) .* A
+        E2 = Ay' * Ay
         F = cholesky(Symmetric(E2); check = false)
         if !issuccess(F)
             failed = true
             break
         end
         objval = sum(log, diag(F.U)) # half the log-determinant of E2
-        Q = A * (F \ Matrix(A'))
+        W = A / F.U
+        Q = W * W'
         h = sqrt.(max.(diag(Q), 0.0))
         if i == 1
             t = minimum(bmAx ./ h)
@@ -118,13 +128,17 @@ function max_volume_ellipsoid(A, b, x0; reg::Real, maxiter::Integer = 500, tol::
                 break
             end
             last_r1, last_r2 = r1, r2
+            # The objective changed by less than `tol` over the last 10 iterations
+            if isfinite(prev_obj) && abs(objval - prev_obj) <= tol * max(min(abs(objval), abs(prev_obj)), 1)
+                converged = true
+                break
+            end
+            prev_obj = objval
         end
-        if (res < tol * (1 + bnrm) && rmu <= minmu) ||
-                (isfinite(prev_obj) && abs(objval - prev_obj) <= tol * max(min(abs(objval), abs(prev_obj)), 1))
+        if res < tol * (1 + bnrm) && rmu <= minmu
             converged = true
             break
         end
-        prev_obj = objval
 
         # Newton step on the primal-dual system
         YQ = y .* Q
@@ -134,8 +148,12 @@ function max_volume_ellipsoid(A, b, x0; reg::Real, maxiter::Integer = 500, tol::
         for j in 1:m
             Gm[j, j] += max(reg, y2h[j] * z[j])
         end
-        luG = lu!(Gm)
-        Tm = luG \ ((h .+ z) .* YA)
+        FG = cholesky!(Symmetric(Gm); check = false)
+        if !issuccess(FG)
+            failed = true
+            break
+        end
+        Tm = FG \ ((h .+ z) .* YA)
         ATP = (y2h .* Tm .- YA)'
         R3Dy = R3 ./ y
         R23 = R2 .- R3Dy
@@ -145,7 +163,7 @@ function max_volume_ellipsoid(A, b, x0; reg::Real, maxiter::Integer = 500, tol::
         end
         dx = ATP_A \ (R1 .+ ATP * R23)
         Adx = A * dx
-        dyDy = luG \ (y2h .* (Adx .- R23))
+        dyDy = FG \ (y2h .* (Adx .- R23))
         dy = y .* dyDy
         dz = R3Dy .- z .* dyDy
         ax = -1 / min(-0.5, minimum(-Adx ./ bmAx))
@@ -157,9 +175,14 @@ function max_volume_ellipsoid(A, b, x0; reg::Real, maxiter::Integer = 500, tol::
         y .+= astep .* dy
         z .+= astep .* dz
         bmAx .-= astep .* Adx
+        reg > 1.0e-6 && i >= 10 && break
     end
     return E2, x .+ x0, converged, distortion, failed
 end
+
+# The smallest slack of the last ellipsoid's center below which `round_polytope!` starts
+# the next round from a new Chebyshev center
+const MVE_RECENTER_SLACK = 1.0e-3
 
 # The floor and largest ratio of the starting slacks of the ellipsoid solver, PolyRound's
 # `default_0_width` and `default_max_ratio_bmAx0` (default_settings.py)
@@ -199,33 +222,42 @@ end
     round_polytope!(center, T, G, h; optimizer, maxiter = 20, max_ratio = 6)
 
 Round the polytope `x = center + T z, G z ≤ h` in place by repeated maximum-volume
-ellipsoids. Each round starts from the Chebyshev center and maps the ellipsoid to the unit
-ball; rounding stops when the ellipsoid's squared axis ratio is at most `max_ratio` (the
+ellipsoids. Each round maps the ellipsoid to the unit ball and starts from the center of the
+last one, or from the Chebyshev center in the first round and when that center lies within
+`1e-3` of a facet; rounding stops when the ellipsoid's squared axis ratio is at most `max_ratio` (the
 criterion of volesti), its solver has converged and its starting slacks needed no raise
 (the criterion of PolyRound), or after `maxiter` rounds. The regularization starts at
 `1e-4` and falls tenfold per round. PolyRound also goes on until the regularization reaches
 `1e-8`; that took web50 of #33 from 31 s to 98 s without changing its roundness.
 
 Adapted from PolyRound, static_classes/rounding/maximum_volume_ellipsoid.py (commit 6d3aee7,
-MIT; Copyright (c) 2026 PolyRound contributors), `iterative_solve`: each round starts from
-a new Chebyshev center, the ellipsoid is repaired to the nearest positive definite matrix
+MIT; Copyright (c) 2026 PolyRound contributors), `iterative_solve`: the ellipsoid is repaired to the nearest positive definite matrix
 before it is factored, and the result is moved back inside when its center ends on the
 boundary. PolyRound also scales the columns of `G` by geometric means first; `warmup`
 scales the variables before the slice instead, which leaves the columns of `G` within a
 factor of 4 on the food webs of #33, and scaling them again made one round of web50 fail to
-converge in 500 iterations (60 s against 11 s).
+converge in 500 iterations (60 s against 11 s). PolyRound also starts every round from a new
+Chebyshev center; a program of the dense rounded constraints took 5 to 7 s on web50, and
+starting from the last ellipsoid's center instead rounded it in 14 s instead of 33 s.
 """
 function round_polytope!(center, T, G, h; optimizer, maxiter::Integer = 20, max_ratio::Real = 6)
     k = size(G, 2)
     k == 0 && return center, T, G, h
-    reg = 1.0e-3
     ratio = Inf # squared axis ratio of the last ellipsoid mapped to the ball
     distortion = 0.0
     for round in 1:maxiter
-        c, r = chebyshev_center(G, h, optimizer)
-        r > 0 || throw(ArgumentError("the polytope has no interior in its span"))
-        shift!(center, T, G, h, c)
-        reg = max(reg / 10, 1.0e-10)
+        # The center of the last ellipsoid lies deep inside the rounded polytope, whose
+        # inscribed radius is near 1; a new Chebyshev center is found when it does not, as
+        # PolyRound does every round. On web50 of #33 a Chebyshev program of the dense
+        # rounded constraints took 5-7 s, against 1-4 s for an ellipsoid.
+        if round == 1 || minimum(h) < MVE_RECENTER_SLACK
+            c, r = chebyshev_center(G, h, optimizer)
+            r > 0 || throw(ArgumentError("the polytope has no interior in its span"))
+            shift!(center, T, G, h, c)
+        end
+        # Powers of 10 computed exactly, so that the test `reg > 1e-6` in the ellipsoid solver
+        # does not see 1.0000000000000002e-6
+        reg = exp10(-min(round + 3, 10))
         E2, c, converged, distortion, failed = max_volume_ellipsoid(G, h, zeros(k); reg)
         λ = eigvals(Symmetric(E2))
         # A singular E2 has no inverse to factor
