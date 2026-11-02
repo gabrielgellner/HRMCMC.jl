@@ -70,7 +70,7 @@ about as much as one of [`HitAndRun`](@ref). Moves per effective sample grow as 
 
 A chain started exactly at a vertex never moves when no coordinate axis points into the
 polytope there, as on a simplex; [`sample`](@ref) and [`sample_until_converged`](@ref)
-start chains inside the largest inscribed ball, away from vertices, unless given
+start chains inside the largest ball around the warmup center, away from vertices, unless given
 `initial_params`.
 
 Haraldsdóttir, H. S., Cousins, B., Thiele, I., Fleming, R. M. T. & Vempala, S. (2017).
@@ -316,14 +316,18 @@ function finish_step!(c::HitAndRunState)
     return c
 end
 
-# A chain state at a uniform random point of the largest ball inside the polytope
+# A chain state at a uniform random point of the largest ball around the warmup center
+# `z = 0` inside the polytope. Its radius is the smallest slack `minimum(h)`, as the rows of
+# `G` have unit norm; `w.radius` belongs to the Chebyshev ball, whose center is `z = 0` only
+# without rounding or extreme points
 function start_state(method::PolytopeSampler, model, rng::AbstractRNG)
     w = geometry(model)
     state = chain_state(method, model)
     k = length(state.z)
-    if k > 0
+    if k > 0 && !isempty(w.h)
         u = randn(rng, k)
-        state.z .= u .* (w.radius * rand(rng)^(1 / k) / norm(u))
+        r = max(minimum(w.h), 0.0)
+        state.z .= u .* (r * rand(rng)^(1 / k) / norm(u))
     end
     return update_x!(state)
 end
@@ -340,7 +344,7 @@ end
 
 # AbstractMCMC interface. Every state keeps the current point in `x`, which `getparams`
 # returns, and `getstats` returns the statistics of its last step; a transition holds both. The first step starts from `initial_params` when given, otherwise
-# from a random point of the largest ball inside the polytope, so that the chains of an
+# from a random point of the largest ball around the warmup center, so that the chains of an
 # ensemble start apart, as R̂ assumes.
 const SamplingModel = Union{Warmup, Target}
 
@@ -397,8 +401,9 @@ Draw `n` points from the uniform distribution on a polytope, or from the density
 and return a vector of matrices. `method` is [`CoordinateHitAndRun`](@ref),
 [`BilliardWalk`](@ref), [`HitAndRun`](@ref) or [`ACHR`](@ref).
 
-Every chain starts at a uniform random point of the largest ball inside the polytope, so
-the chains of an ensemble start apart, as R̂ in [`diagnostics`](@ref) assumes; pass
+Every chain starts at a uniform random point of the largest ball around the warmup center
+inside the polytope, so the chains of an ensemble start apart, as R̂ in
+[`diagnostics`](@ref) assumes; pass
 `initial_params`, a point of the polytope (a vector of points, one per chain, with an
 ensemble), to choose the start. The chain then discards `discard_initial` steps and keeps
 every `thinning`-th point. Consecutive points are correlated; check the effective sample

@@ -11,9 +11,9 @@ over the varying coordinates; the first half is discarded as burn-in (Gelman & R
 1992). The first round keeps `n` points per chain; rounds stop once `max_n` points per
 chain are kept.
 
-Each chain starts at a random point of the largest ball inside the polytope and has its
-own random number generator, seeded from `rng`, so the result does not depend on the
-number of threads; chains run on separate threads when Julia has them.
+Each chain starts at a random point of the largest ball around the warmup center inside
+the polytope and has its own random number generator, seeded from `rng`, so the result
+does not depend on the number of threads; chains run on separate threads when Julia has them.
 
 Returns a named tuple: `chains` (one matrix per chain, a point per column), `diagnostics`
 (see [`diagnostics`](@ref)), `n` (points kept per chain), `converged` and `fixed`, the
