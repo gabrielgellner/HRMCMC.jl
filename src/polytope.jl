@@ -63,14 +63,25 @@ end
 """
     isfeasible(P::Polytope, x; atol = 1e-8)
 
-Whether `x` satisfies every constraint of `P` to within `atol`. `x in P` uses the default
+Whether `x` satisfies every constraint of `P` to within `atol`, a distance in units of `x`:
+an inequality or equality row is divided by its norm first. `x in P` uses the default
 tolerance.
 """
 function isfeasible(P::Polytope, x::AbstractVector{<:Real}; atol::Real = 1.0e-8)
     length(x) == nvars(P) || throw(DimensionMismatch("x has length $(length(x)), P has $(nvars(P)) variables"))
     all(P.lower .- atol .<= x .<= P.upper .+ atol) || return false
-    all(P.A * x .<= P.b .+ atol) || return false
-    return all(abs.(P.C * x .- P.d) .<= atol)
+    A, b = unit_rows(P.A, P.b)
+    all(A * x .<= b .+ atol) || return false
+    C, d = unit_rows(P.C, P.d)
+    return all(abs.(C * x .- d) .<= atol)
+end
+
+# The rows of `M` and the entries of `v` divided by the norms of the rows, so that residuals
+# and solver tolerances are distances in units of `x`; zero rows are kept
+function unit_rows(M, v)
+    r = [norm(view(M, i, :)) for i in axes(M, 1)]
+    r[r .== 0] .= 1
+    return M ./ r, v ./ r
 end
 
 Base.in(x::AbstractVector{<:Real}, P::Polytope) = isfeasible(P, x)
@@ -109,20 +120,24 @@ function lp(optimizer)
 end
 
 # A JuMP model with the constraints of `P` and no objective. Constraints are built from the
-# nonzero coefficients, as the matrices of food web problems are mostly zeros.
+# nonzero coefficients, as the matrices of food web problems are mostly zeros, and from rows
+# of unit norm, so that the solver's feasibility tolerance is a distance in `x` (PolyRound
+# normalizes its rows too).
 function lp_model(P::Polytope, optimizer)
     model = lp(optimizer)
     n = nvars(P)
+    A, b = unit_rows(P.A, P.b)
+    C, d = unit_rows(P.C, P.d)
     x = @variable(model, [1:n])
     for i in 1:n
         isfinite(P.lower[i]) && set_lower_bound(x[i], P.lower[i])
         isfinite(P.upper[i]) && set_upper_bound(x[i], P.upper[i])
     end
-    for i in eachindex(P.b)
-        @constraint(model, sum(P.A[i, j] * x[j] for j in 1:n if P.A[i, j] != 0; init = 0.0) <= P.b[i])
+    for i in eachindex(b)
+        @constraint(model, sum(A[i, j] * x[j] for j in 1:n if A[i, j] != 0; init = 0.0) <= b[i])
     end
-    for i in eachindex(P.d)
-        @constraint(model, sum(P.C[i, j] * x[j] for j in 1:n if P.C[i, j] != 0; init = 0.0) == P.d[i])
+    for i in eachindex(d)
+        @constraint(model, sum(C[i, j] * x[j] for j in 1:n if C[i, j] != 0; init = 0.0) == d[i])
     end
     return model, x
 end

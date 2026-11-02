@@ -21,6 +21,11 @@ using PolytopeSamplers: Polytope, isfeasible
         @test [0.4, 0.4] in line
         @test !([0.4, 0.5] in line)
         @test_throws DimensionMismatch isfeasible(triangle, [0.1])
+        # Tolerances are distances in x whatever the scale of a row (#40): 100 x₁ ≤ 50 is
+        # violated by 5e-9 in x₁, within the default tolerance, and 1e-9 x₁ ≤ 0.5e-9 by 0.1
+        @test [0.5 + 5.0e-9, 0.0] in Polytope([0.0, 0.0], [1.0, 1.0]; A = [100.0 0.0], b = [50.0])
+        @test !([0.6, 0.0] in Polytope([0.0, 0.0], [1.0, 1.0]; A = [1.0e-9 0.0], b = [0.5e-9]))
+        @test [0.5, 0.5 + 5.0e-9] in Polytope([0.0, 0.0], [1.0, 1.0]; C = [0.0 1.0e3], d = [500.0])
     end
 
     @testset "isempty" begin

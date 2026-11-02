@@ -225,8 +225,9 @@ function chebyshev_slice(P::Polytope, optimizer, atol)
     n = nvars(P)
     fixed = findall(P.lower .== P.upper)
     E = Matrix{Float64}(I, n, n)
-    Ceq = [P.C; E[fixed, :]]
-    deq = [P.d; P.lower[fixed]]
+    C, d = unit_rows(P.C, P.d)
+    Ceq = [C; E[fixed, :]]
+    deq = [d; P.lower[fixed]]
     x0 = isempty(deq) ? zeros(n) : pinv(Ceq) * deq
     if !isempty(deq) && norm(Ceq * x0 .- deq) > atol * max(1, norm(deq))
         throw(ArgumentError("the polytope is empty: its equalities have no solution"))
@@ -267,11 +268,15 @@ function reduced_constraints(P::Polytope, center, T; clamp::Bool = true)
     k = size(T, 2)
     rows = Vector{Float64}[]
     rhs = Float64[]
+    # a row constant on the slice is dropped, but one violated there leaves the slice empty
+    tol = THIN_TOL * max(1.0, norm(center, Inf))
     function add!(g, s, scale)
         r = norm(g)
         if r > ROW_TOL * scale
             push!(rows, g ./ r)
             push!(rhs, (clamp ? max(s, 0.0) : s) / r)
+        elseif !clamp && s < -tol * scale
+            throw(ArgumentError("the polytope is empty: its equalities violate a bound or inequality"))
         end
         return
     end
@@ -294,8 +299,9 @@ end
 # equalities that hold over the polytope and more for directions that are only thin
 function active_equalities(P::Polytope, points, center, atol)
     n = nvars(P)
-    rows = [P.C]
-    rhs = [P.d]
+    C, d = unit_rows(P.C, P.d)
+    rows = [C]
+    rhs = [d]
     width = 0.0
     for i in 1:n
         lo, hi = extrema(view(points, i, :))
@@ -307,14 +313,15 @@ function active_equalities(P::Polytope, points, center, atol)
             width = max(width, hi - lo)
         end
     end
-    slack = P.b .- P.A * points
-    for i in eachindex(P.b)
+    # slacks in units of x, so that atol is a distance whatever the scale of the row
+    A, b = unit_rows(P.A, P.b)
+    slack = b .- A * points
+    for i in eachindex(b)
         largest = maximum(view(slack, i, :))
         if largest <= atol
-            push!(rows, P.A[i:i, :])
-            push!(rhs, [dot(view(P.A, i, :), center)])
-            r = norm(view(P.A, i, :))
-            r > 0 && (width = max(width, largest / r))
+            push!(rows, A[i:i, :])
+            push!(rhs, [dot(view(A, i, :), center)])
+            width = max(width, largest)
         end
     end
     fixed = findall(P.lower .== P.upper)
