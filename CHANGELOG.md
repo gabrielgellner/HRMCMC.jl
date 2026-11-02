@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 - **diagnostics**: Report the rank-normalized R̂, which also compares the spread of the chains; `sample_until_converged` stops on it (#44)
 - **density**: Throw when a chain starts where the density is zero, infinite or NaN (#70)
 - **billiard**: Set the default trajectory length on unrounded warmups by burn-in instead of `2√k r` (#71)
+- **polytope**: Reject infinite or NaN constraints, and treat bounds of `1e20` or more as infinite, as HiGHS does (#83)
 
 ### Features
 
@@ -26,6 +27,8 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- **warmup**: Rescale the variables by geometric-mean scaling before the linear programs and rounding, so that polytopes whose coefficients span many orders of magnitude, such as food webs with biomasses from `1e-3` to `1e3`, warm up (#83)
+- **warmup**: Check every linear program's result, retry failed programs, drop dependent equality rows, and guard ellipsoid and `:samples` rounding as PolyRound, PolytopeSamplerMatlab, volesti and hops do (#83)
 - **density**: Keep chains moving on densities that diverge at a face (#29)
 - **density**: Keep truncated-normal chord draws inside the chord when the mode lies far away (#42)
 - **warmup**: Keep the center inside the polytope when fixing thin directions, and report fixed coordinates (#31)
