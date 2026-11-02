@@ -78,6 +78,27 @@ const fast_methods = filter(m -> !(m isa Union{DikinWalk, VaidyaWalk}), methods)
         @test allunique(firsts)
     end
 
+    @testset "initial_state is copied ($m)" for m in methods
+        # Chains continue from a copy of initial_state, so the state passed stays as it was
+        # and one state passed to every chain of an ensemble gives each its own (#69). The
+        # copy shares the read-only matrices and copies the buffers a step writes
+        w = warmup(Polytope(zeros(3), ones(3)))
+        state = PolytopeSamplers.chain_state(m, w)
+        state.z .= 0.1
+        z0 = copy(state.z)
+        sample(Xoshiro(1), w, m, 20; initial_state = state, progress = false)
+        chains = sample(
+            Xoshiro(1), w, m, MCMCSerial(), 20, 3; initial_state = fill(state, 3), progress = false,
+        )
+        @test state.z == z0
+        @test allunique(c[:, end] for c in chains)
+        c = PolytopeSamplers.copy_state(state)
+        @test c.z == state.z && c.z !== state.z && c.x !== state.x
+        @test c.warmup === state.warmup
+        hasfield(typeof(c), :GG) && @test c.GG === state.GG
+        hasfield(typeof(c), :zpoints) && @test c.zpoints === state.zpoints
+    end
+
     @testset "random starts lie inside" begin
         # The center z = 0 of these warmups is not the center of the largest inscribed ball,
         # so starts drawn in a ball of the Chebyshev radius fell outside the triangle (#38)
