@@ -55,7 +55,7 @@ two (121 s against 10 s with 2000 constraints in 400 dimensions), so
 The steps can also be run separately:
 
 ```julia
-w = warmup(P)                                            # 2 LPs, ellipsoid rounding
+w = warmup(P)                       # prune redundant rows, find the slice, round
 r = sample_until_converged(Xoshiro(1), w, BilliardWalk(); target_ess = 1_000)
 
 X = sample(Xoshiro(1), w, BilliardWalk(), 10_000; discard_initial = 1_000)
@@ -71,8 +71,13 @@ d.min_ess, d.max_rhat     # aim for max_rhat < 1.01
   polytope is bounded. A polytope with room for a ball has no other equalities; when the
   ball has radius zero, `warmup` falls back to `extremes = true`. `extremes = true` solves
   `2n` linear programs for the extremes of each coordinate and finds the equalities that
-  hold throughout from them. With 1000 constraints in 200 dimensions, warmup and sampling to
-  1000 ESS take 4 s with the default and 59 s with `extremes = true`.
+  hold throughout from them. With 1000 dense constraints in 200 dimensions and
+  `prune = false`, warmup and sampling to 1000 ESS take 4 s with the default and 59 s with
+  `extremes = true`.
+- `prune = true` (default) solves one linear program per bound and inequality and drops
+  those that do not change the polytope, which makes every step cheaper: 502 of 796
+  constraints on a 282-variable food web. Pass `prune = false` when `A` is dense, where
+  these programs take far longer than the rest of the warmup.
 - `rounding = :ellipsoid` (default) maps the maximum-volume inscribed ellipsoid to the unit
   ball until the polytope is close to round; `:samples` rounds from billiard-walk samples;
   `:none` skips rounding.

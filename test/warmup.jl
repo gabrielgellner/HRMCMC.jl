@@ -34,10 +34,13 @@ include(joinpath(@__DIR__, "fixtures", "thin_foodweb.jl"))
         @test w.center ≈ [1 / 3, 1 / 3]
         @test size(w.transform) == (2, 2)
         @test w.transform' * w.transform ≈ I
-        # The reduced constraints are the four bounds and the diagonal edge, with unit-norm
-        # rows
-        @test size(w.G) == (5, 2)
+        # The reduced constraints are the two lower bounds and the diagonal edge, with
+        # unit-norm rows. The upper bounds, reached only at the vertices (1, 0) and (0, 1),
+        # are redundant; without pruning all five remain
+        @test size(w.G) == (3, 2)
+        @test w.removed == 2
         @test all(r -> norm(r) ≈ 1, eachrow(w.G))
+        @test size(warmup(P; extremes = true, rounding = false, prune = false).G) == (5, 2)
         @test w.zpoints ≈ w.transform' * (w.points .- w.center)
         # The maximum-volume ellipse of a triangle is centered at its centroid
         @test warmup(P).center ≈ [1 / 3, 1 / 3] atol = 1.0e-4
@@ -85,6 +88,39 @@ include(joinpath(@__DIR__, "fixtures", "thin_foodweb.jl"))
             @test sv[1] / sv[end] < 4
         end
         @test round_box(1) == round_box(1)
+    end
+
+    @testset "redundant constraints" begin
+        # The unit cube with x₁ + x₂ ≤ 5, which no point reaches, x₁ + x₂ + x₃ ≤ 3, reached
+        # only at (1, 1, 1), and two more copies of x₁ ≤ 1. Pruning keeps one of the three
+        # copies and the six facets of the cube
+        A = [1.0 1.0 0.0; 1.0 1.0 1.0; 1.0 0.0 0.0; 1.0 0.0 0.0]
+        P = Polytope(zeros(3), ones(3); A, b = [5.0, 3.0, 1.0, 1.0])
+        Q, removed = PolytopeSamplers.remove_redundant(P, PolytopeSamplers.HiGHS.Optimizer)
+        @test removed == 4
+        @test Q.A == [1.0 0.0 0.0]
+        @test Q.lower == zeros(3)
+        @test Q.upper == [Inf, 1.0, 1.0]
+        for extremes in (false, true)
+            w = warmup(P; extremes)
+            @test w.polytope === P
+            @test w.removed == 4
+            @test size(w.G, 1) == 6
+            @test size(warmup(P; extremes, prune = false).G, 1) == 10
+        end
+        @test occursin("4 redundant constraints removed", sprint(show, warmup(P)))
+        # The upper bounds of the simplex are reached only at its vertices
+        simplex = Polytope(zeros(3), ones(3); A = ones(1, 3), b = [1.0])
+        w = warmup(simplex)
+        @test w.removed == 3
+        @test size(w.G, 1) == 4
+        X = sample(Xoshiro(1), w, BilliardWalk(), 2000)
+        @test all(x -> x in simplex, eachcol(X))
+        # On the triangle 0 ≤ x₁ ≤ x₂ ≤ 1 the bound x₂ ≥ 0 is reached only at the origin, and
+        # an infinite bound has no program
+        w = warmup(Polytope([0.0, 0.0], [Inf, 1.0]; A = [1.0 -1.0], b = [0.0]))
+        @test w.removed == 1
+        @test size(w.G, 1) == 3
     end
 
     @testset "ranges" begin
