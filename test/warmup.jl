@@ -6,6 +6,7 @@ using Test: @test_logs
 using JuMP: get_attribute, optimizer_with_attributes
 
 include(joinpath(@__DIR__, "fixtures", "thin_foodweb.jl"))
+include(joinpath(@__DIR__, "fixtures", "wide_range_foodweb.jl"))
 
 @testset "warmup" begin
     @testset "errors" begin
@@ -271,6 +272,43 @@ include(joinpath(@__DIR__, "fixtures", "thin_foodweb.jl"))
         end
         @test err isa ErrorException
         @test occursin("TIME_LIMIT", err.msg)
+    end
+
+    @testset "geometric-mean scaling" begin
+        # A diagonal rescaling of a matrix of ones scales back to entries near 1, with
+        # scales that are powers of 2
+        A = [1.0e-3, 1.0, 1.0e3] .* ones(3, 2) .* [1.0e-6 1.0e2]
+        c, r = PolytopeSamplers.gmscale(A)
+        @test all(x -> ispow2(x), c) && all(x -> ispow2(x), r)
+        scaled = abs.(A ./ r ./ c')
+        @test maximum(scaled) / minimum(scaled) < 4
+        # Polytopes whose coefficients are near 1 are left as they are
+        @test PolytopeSamplers.scaled_polytope(Polytope(zeros(3), ones(3); A = ones(1, 3), b = [1.0]))[2] == ones(3)
+        @test PolytopeSamplers.scaled_polytope(Polytope(zeros(2), ones(2)))[2] == ones(2)
+    end
+
+    @testset "badly scaled food web polytopes" begin
+        # Biomasses spanning six orders of magnitude (#83). Without scaling, pruning removed
+        # bounds that bind, as HiGHS reported inaccurate optimal points, the boundedness
+        # program stopped with an error that warmup read as "unbounded", and rounding left
+        # the inscribed radius at 2e-8
+        P = wide_range_foodweb_polytope(4)
+        w = warmup(Xoshiro(1), P)
+        @test size(w.transform, 2) == 79
+        @test 0.9 < w.radius < 1.1
+        @test w.removed == 44
+        # atol keeps its meaning in units of x: coordinates narrower than 1e-6 are fixed
+        w6 = @test_logs (:warn, r"fixed directions") match_mode = :any warmup(Xoshiro(1), P; atol = 1.0e-6)
+        @test length(PolytopeSamplers.fixed_coordinates(w6)) == 7
+        # The second polytope failed in v0.1.0 too, with every rounding
+        Q = wide_range_foodweb_polytope(1)
+        for rounding in (:ellipsoid, :samples)
+            w = warmup(Xoshiro(1), Q; rounding)
+            @test size(w.transform, 2) == 73
+            X = sample(Xoshiro(2), w, BilliardWalk(), 200; progress = false)
+            @test all(x -> x in Q, eachcol(X))
+        end
+        @test warmup(Xoshiro(1), Q).radius > 0.9
     end
 
     # Issue #31: with atol = 1e-6 the warmup fixed thin directions at a center 1.1e-6 below a

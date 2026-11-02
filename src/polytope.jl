@@ -148,11 +148,64 @@ end
 Whether `P` has no points, decided by a linear program.
 """
 function Base.isempty(P::Polytope; optimizer = HiGHS.Optimizer)
-    model, _ = lp_model(P, optimizer)
+    model, _ = lp_model(first(scaled_polytope(P)), optimizer)
     optimize!(model)
     is_solved_and_feasible(model) && return false
     # With no objective the problem cannot be unbounded, so either status means infeasible
     status = termination_status(model)
     status in (INFEASIBLE, INFEASIBLE_OR_UNBOUNDED) && return true
     return error("the feasibility linear program stopped with status $status")
+end
+
+# Adapted from PolytopeSamplerMatlab, code/prepare/gmscale.m (commit f85505c, GPL-3.0;
+# Michael Saunders, Systems Optimization Laboratory, Stanford University, after a routine
+# of Robert Fourer, 1979): geometric-mean scaling. Returns column scales `c` and row scales
+# `r`, powers of 2, such that the entries of `R⁻¹ A C⁻¹` are near 1. Each pass divides every
+# row and then every column by the geometric mean of its largest and smallest nonzero
+# magnitudes, with the smallest raised to at least `damp` times the largest, until the
+# largest ratio within a column improves by less than the factor `scltol`; a final pass makes
+# the largest entry of each column 1.
+function gmscale(A::AbstractMatrix; scltol::Real = 0.9, maxpass::Integer = 10, damp::Real = 1.0e-4)
+    m, n = size(A)
+    A = abs.(A)
+    pow2(x) = exp2(ceil(log2(x)))
+    # the largest and smallest nonzero magnitude of each column (dims = 1) or row (dims = 2)
+    extremes(S, dims) = (
+        vec(maximum(S; dims, init = 0.0)),
+        vec(minimum(s -> s == 0 ? Inf : s, S; dims, init = Inf)),
+    )
+    aratio = 1.0e50
+    rscale = ones(m)
+    cscale = ones(n)
+    for npass in 0:maxpass
+        cmax, cmin = extremes(A ./ rscale, 1)
+        cmin[isinf.(cmin)] .= 0
+        sratio = maximum((cmax[j] / (cmin[j] + eps()) for j in 1:n if cmax[j] > 0); init = 1.0)
+        npass > 0 && (cscale = sqrt.(max.(cmin, damp .* cmax) .* cmax))
+        (npass >= 2 && sratio >= aratio * scltol) && break
+        npass == maxpass && break
+        aratio = sratio
+        cscale[cscale .== 0] .= 1
+        cscale = pow2.(cscale)
+        rmax, rmin = extremes(A ./ cscale', 2)
+        rmin[isinf.(rmin)] .= 0
+        rscale = sqrt.(max.(rmin, damp .* rmax) .* rmax)
+        rscale[rscale .== 0] .= 1
+        rscale = pow2.(rscale)
+    end
+    cscale = vec(maximum(A ./ rscale; dims = 1, init = 0.0))
+    cscale[cscale .== 0] .= 1
+    return pow2.(cscale), rscale
+end
+
+# `P` in the variables `x̄ = c .* x`, with `c` from the geometric-mean scaling of its
+# constraint matrix `[A; C]`, and `c`. Linear programs and rounding are solved on the scaled
+# polytope, as PolytopeSamplerMatlab rescales before its preprocessing (Polytope.m, rescale):
+# on food web polytopes whose coefficients span six orders of magnitude, HiGHS reported
+# optimal points that violated bounds by 0.59 and maximum-volume ellipsoids failed without
+# it (#83). The scales are powers of 2, so mapping back is exact.
+function scaled_polytope(P::Polytope)
+    M = [P.A; P.C]
+    c = isempty(M) ? ones(nvars(P)) : first(gmscale(M))
+    return Polytope(P.lower .* c, P.upper .* c, P.A ./ c', P.b, P.C ./ c', P.d), c
 end

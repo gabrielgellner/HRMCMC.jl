@@ -46,6 +46,17 @@ slice they define.
 w = warmup(simplex)
 ```
 
+### Scaling
+
+Before its linear programs, `warmup` rescales the variables by geometric-mean scaling (the
+`gmscale` of Saunders, as PolytopeSamplerMatlab and dingo use), which brings the
+constraint coefficients of each variable near 1. Food web polytopes whose biomasses span
+`1e-3` to `1e3` have coefficients over six orders of magnitude; without scaling, HiGHS
+returned points that violated bounds and the maximum-volume ellipsoid could not be found.
+The scales are powers of 2, so the warmup maps back to the original variables exactly, and
+`atol` and every result are in their units. Polytopes with coefficients near 1 are left as
+they are. [`ranges`](@ref) and `isempty` scale the same way.
+
 ### Finding the slice: `extremes`
 
 With `extremes = false` (the default), `warmup` solves one linear program for the largest

@@ -25,7 +25,8 @@ function chebyshev_center(G, h, optimizer)
             throw(ArgumentError("the polytope is unbounded: it holds balls of any radius"))
         error("the Chebyshev center linear program stopped with status $status")
     end
-    return value.(z), value(r)
+    # `r ≥ 0` holds to the solver's tolerance, which left radii of -1e-12 (#83)
+    return value.(z), max(value(r), 0.0)
 end
 
 # Adapted from volesti, include/preprocess/max_inscribed_ellipsoid.hpp (commit 064e18c,
@@ -243,6 +244,8 @@ function round_by_samples!(
     previous = Inf
     for phase in 1:maxiter
         c, r = chebyshev_center(G, h, optimizer)
+        # As hopsy raises for a Chebyshev ball of radius 0 (misc.py, commit 54516d7, MIT)
+        r > 0 || error("warmup: :samples rounding found no ball inside the polytope in phase $phase")
         shift!(center, T, G, h, c)
         ends .-= c
         w = Warmup(P, zeros(length(center), 0), center, T, G, h, zeros(k, 0), r, false; optimizer)
