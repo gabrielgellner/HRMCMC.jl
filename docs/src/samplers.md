@@ -9,11 +9,16 @@ unless noted.
 | Sampler | Moves per step | Uniform | Densities | Use it for |
 |---|---|---|---|---|
 | [`BilliardWalk`](@ref) | a trajectory reflecting off facets | yes | no | the default |
-| [`CoordinateHitAndRun`](@ref) | one move per coordinate (CHRR) | yes | slice sampling | densities; very cheap moves |
-| [`HitAndRun`](@ref) | one random direction | yes | slice sampling | a simple reference |
+| [`CoordinateHitAndRun`](@ref) | `k` moves, one per coordinate (CHRR) | yes | slice sampling | densities; very cheap moves |
+| [`HitAndRun`](@ref) | one move along a random direction | yes | slice sampling | a simple reference |
 | [`CRHMC`](@ref) | Hamiltonian dynamics in the barrier metric | yes | needs the gradient | smooth densities; corners |
 | [`DikinWalk`](@ref), [`VaidyaWalk`](@ref) | a Metropolis-filtered barrier step | yes | yes | independent checks; no rounding |
 | [`ACHR`](@ref) | direction from the running mean | yes | no | comparison with COBRA Toolbox results |
+
+A step of `CoordinateHitAndRun` sweeps all `k` coordinates, while a step of `HitAndRun` is
+one move, as in volesti, hops and the COBRA Toolbox. The two cost about the same per step,
+but `HitAndRun` needs about `k` times as many steps, so the same `n`, `max_n` or `thinning`
+does not give the two the same amount of mixing.
 
 ## Speed
 
