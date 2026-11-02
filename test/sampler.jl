@@ -1,11 +1,12 @@
 using PolytopeSamplers: PolytopeSamplers, ACHR, BilliardWalk, CoordinateHitAndRun, CRHMC,
     DikinWalk,
-    HitAndRun, VaidyaWalk, MCMCSerial, MCMCThreads, Polytope, sample, warmup
+    HitAndRun, VaidyaWalk, MCMCSerial, MCMCThreads, Polytope, diagnostics, sample, warmup
 using AllocCheck: check_allocs
 using JET: @test_opt
 using MCMCChains: Chains
 using Random: Xoshiro
 using Statistics: mean, var
+using Test: @test_logs
 
 # The statistics of one step from the pentagon's warmup
 step_stats(m, w) = AbstractMCMC.getstats(last(AbstractMCMC.step(Xoshiro(1), w, m)))
@@ -262,10 +263,32 @@ const fast_methods = filter(m -> !(m isa Union{DikinWalk, VaidyaWalk}), methods)
         @test c.trajectory_length ≈ 2 * sqrt(2) * w.radius
         @test c.max_reflections == 2000
         # Long trajectories with one reflection allowed are mostly abandoned: the chain stays
-        # put for those steps and every point stays in the polytope
-        X = sample(Xoshiro(1), w, BilliardWalk(trajectory_length = 50.0, max_reflections = 1), 200)
+        # put for those steps, every point stays in the polytope, the steps are reported, and
+        # the chain warns (#71)
+        m = BilliardWalk(trajectory_length = 50.0, max_reflections = 1)
+        X = @test_logs (:warn, r"trajectories were abandoned") sample(Xoshiro(1), w, m, 200; progress = false)
         @test all(x -> x in pentagon, eachcol(X))
         @test count(j -> X[:, j] == X[:, j - 1], 2:200) > 100
+        c = PolytopeSamplers.start_state(m, w, Xoshiro(1))
+        flags = [(PolytopeSamplers.step!(Xoshiro(j), c); AbstractMCMC.getstats(c).is_abandoned) for j in 1:200]
+        @test count(flags) == c.abandoned > 100
+    end
+
+    @testset "BilliardWalk trajectory length without rounding" begin
+        # On an unrounded skinny box the default length 2√k r ≈ 3 gave R̂ 1.40 after 4000
+        # steps per chain; the repeated burn-in sets it near the box's length of 100, and
+        # over 50 seeds the largest R̂ after 2000 steps per chain was 1.006 (#71)
+        box = Polytope(zeros(10), [100.0; ones(9)])
+        w = warmup(box; rounding = :none)
+        L = PolytopeSamplers.chain_state(BilliardWalk(), w).trajectory_length
+        @test 50 < L < 200
+        @test PolytopeSamplers.chain_state(BilliardWalk(), w).trajectory_length == L
+        @test PolytopeSamplers.chain_state(BilliardWalk(trajectory_length = 3.0), w).trajectory_length == 3.0
+        chains = sample(Xoshiro(1), w, BilliardWalk(), MCMCSerial(), 2000, 4; progress = false)
+        @test diagnostics(chains).max_rhat < 1.01
+        # A rounded warmup keeps 2√k r
+        wr = warmup(box)
+        @test PolytopeSamplers.chain_state(BilliardWalk(), wr).trajectory_length ≈ 2 * sqrt(10) * wr.radius
     end
 
     # CRHMC keeps slacks with its cached metric, which may be at the last proposal

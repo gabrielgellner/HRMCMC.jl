@@ -1,8 +1,9 @@
-# Values computed on first use and shared by the chains of a warmup, under the lock: Gᵀ and
-# G Gᵀ for the billiard walk, and the extreme points in `x` and `z` for `ranges` and ACHR
-# when the warmup was built without them
+# Values computed on first use and shared by the chains of a warmup, under the lock: Gᵀ, G Gᵀ
+# and, without rounding, the trajectory length for the billiard walk, and the extreme points
+# in `x` and `z` for `ranges` and ACHR when the warmup was built without them
 mutable struct WarmupCache
     reflections::Union{Nothing, Tuple{Matrix{Float64}, Matrix{Float64}}}
+    trajectory_length::Union{Nothing, Float64}
     points::Union{Nothing, Matrix{Float64}}
     zpoints::Union{Nothing, Matrix{Float64}}
     const optimizer::Any
@@ -52,7 +53,7 @@ function Warmup(
     )
     return Warmup(
         P, points, center, transform, G, h, zpoints, radius, rounded, removed,
-        WarmupCache(nothing, nothing, nothing, optimizer, ReentrantLock()),
+        WarmupCache(nothing, nothing, nothing, nothing, optimizer, ReentrantLock()),
     )
 end
 

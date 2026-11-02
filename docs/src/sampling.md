@@ -44,7 +44,7 @@ The `internals` section holds the statistics of each step, from `AbstractMCMC.ge
 
 | Sampler | Statistics |
 |---|---|
-| [`BilliardWalk`](@ref) | `n_reflections`, the reflections in the step |
+| [`BilliardWalk`](@ref) | `n_reflections`, the reflections in the step, and `is_abandoned`, whether the trajectory reached `max_reflections` and the chain stayed put |
 | [`DikinWalk`](@ref), [`VaidyaWalk`](@ref) | `is_accept`, and `acceptance_rate` so far |
 | [`CRHMC`](@ref) | `is_accept`, `acceptance_rate` and `step_size` |
 | [`HitAndRun`](@ref), [`CoordinateHitAndRun`](@ref) with a [`Target`](@ref) | `n_evaluations`, the log-density evaluations of the slice sampler, and `n_exhausted`, the slice updates that gave up after 200 shrinkage steps and left the point where it was |
