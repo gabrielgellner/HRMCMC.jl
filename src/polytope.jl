@@ -136,6 +136,9 @@ function lp(optimizer)
     return model
 end
 
+# HiGHS solves these programs by its serial dual simplex (`simplex_strategy = 1`, with
+# `parallel = "choose"`), so warmups on many Julia threads do not compete for solver threads.
+#
 # Solve `model`. Presolve can stop with INFEASIBLE_OR_UNBOUNDED on a degenerate program
 # that is neither; hops solves again without presolve
 # (LinearProgramGurobiImpl.cpp:96-100, commit b62592e, MIT), as here for HiGHS.

@@ -153,8 +153,10 @@ Prepare `P` for sampling and return a [`Warmup`](@ref) to [`sample`](@ref) from.
 With `extremes = false` (the default), solve one linear program for the largest ball inside
 `P` in the slice of `C * x .== d` and the fixed coordinates, as in multiphase Monte Carlo
 sampling ([`mmcs`](@ref)). A polytope with room for a ball of positive radius has no other
-equalities. If the ball has radius below `atol`, `P` has equalities beyond the explicit
-ones, and `warmup` falls back to `extremes = true`.
+equalities. If the ball has radius below `atol`, one more linear program finds the
+inequalities that hold with equality over `P` (Freund, Roundy & Todd 1985), and the ball
+is found again in their slice. If it is still that small, `P` is thinner than `atol` in some
+direction, and `warmup` falls back to `extremes = true`, which measures such directions.
 
 With `extremes = true`, solve `2n` linear programs, minimizing and maximizing each of the
 `n` coordinates. The extreme points locate the constraints that hold with equality over all
@@ -286,9 +288,20 @@ function scaled_coordinate_extremes(P::Polytope, optimizer)
     check_feasible(s.model)
     n = nvars(P)
     points = Matrix{Float64}(undef, n, 2n)
+    found = 0
     for i in 1:n, (k, sense) in enumerate((MIN_SENSE, MAX_SENSE))
-        what = "the $(sense == MIN_SENSE ? "minimum" : "maximum") of coordinate $i"
-        points[:, 2(i - 1) + k] = checked_point(extreme_point!(s, P, optimizer, sense, x -> x[i]), what)
+        # A point found earlier that sits at the bound of coordinate `i` is its extreme, so
+        # its program is skipped; on food webs most coordinates have a lower bound of 0
+        bound = sense == MIN_SENSE ? P.lower[i] : P.upper[i]
+        j = isfinite(bound) ? findfirst(c -> points[i, c] == bound, 1:found) : nothing
+        p = if j === nothing
+            what = "the $(sense == MIN_SENSE ? "minimum" : "maximum") of coordinate $i"
+            checked_point(extreme_point!(s, P, optimizer, sense, x -> x[i]), what)
+        else
+            points[:, j]
+        end
+        found += 1
+        points[:, found] = p
     end
     return unique(points; dims = 2)
 end
@@ -483,8 +496,11 @@ function extreme_slice(P::Polytope, optimizer, atol, c = ones(nvars(P)))
 end
 
 # The slice of `C * x .== d` and the fixed coordinates, centered on the largest ball inside
-# the polytope in that slice, from one linear program. Returns `nothing` when the ball has
-# radius below `ratol` (default `atol`), as the polytope may then have further equalities.
+# the polytope in that slice, from one linear program. When the ball has radius below `ratol`
+# (default `atol`), the inequalities that hold with equality over the polytope are found by
+# one more program (`implicit_equalities`), the slice is restricted to them, and the ball is
+# found again. Returns `nothing` when it is still that small, as the polytope is then thin in
+# some direction, which only the extreme points measure against `atol`.
 function chebyshev_slice(P::Polytope, optimizer, atol, ratol = atol)
     n = nvars(P)
     fixed = findall(P.lower .== P.upper)
@@ -500,9 +516,49 @@ function chebyshev_slice(P::Polytope, optimizer, atol, ratol = atol)
         return x0, T, G, max.(h, 0.0)
     end
     c, r = chebyshev_center(G, h, optimizer)
-    r > ratol || return nothing
+    if r <= ratol
+        tight = implicit_equalities(G, h, optimizer)
+        isempty(tight) && return nothing
+        Ge, he = independent_rows(G[tight, :], h[tight]; atol)
+        x0 = x0 .+ T * (pinv(Ge) * he)
+        T = T * nullspace(Ge)
+        T[abs.(T) .< ZERO_TOL] .= 0
+        G, h = reduced_constraints(P, x0, T; clamp = false)
+        if size(T, 2) == 0
+            isfeasible(P, x0; atol) || throw(ArgumentError("the polytope is empty"))
+            return x0, T, G, max.(h, 0.0)
+        end
+        c, r = chebyshev_center(G, h, optimizer)
+        r > ratol || return nothing
+    end
     isbounded(G, optimizer) || throw(ArgumentError("the polytope is unbounded"))
     return shift!(x0, T, G, h, c)
+end
+
+# The rows of `G z ≤ h` (nonempty, unit-norm rows) that hold with equality over the polytope,
+# from one linear program (Freund, Roundy & Todd 1985): maximize `Σ tᵢ` subject to
+# `G y + t ≤ θ h`, `0 ≤ t ≤ 1` and `θ ≥ 1`. At a point `z = y / θ` of the polytope a row
+# reaches `tᵢ = θ (hᵢ - Gᵢ z)`, so every row with positive slack somewhere reaches `tᵢ = 1`
+# at an optimum, and the rows left below 1/2 hold with equality. `θ` is capped at
+# `1 / (2 THIN_TOL)`, so a row whose slack never exceeds the solver's accuracy counts as an
+# equality, as in `active_equalities`. PolytopeSamplerMatlab finds these rows from an
+# analytic center and PolyRound and polytopewalk with one program per row.
+#
+# Freund, R. M., Roundy, R. & Todd, M. J. (1985). Identifying the set of always-active
+# constraints in a system of linear inequalities by a single linear program. Working paper
+# 1674-85, Sloan School of Management, MIT. <https://dspace.mit.edu/handle/1721.1/2111>
+function implicit_equalities(G, h, optimizer)
+    m, k = size(G)
+    model = lp(optimizer)
+    y = @variable(model, [1:k])
+    t = @variable(model, [1:m], lower_bound = 0, upper_bound = 1)
+    θ = @variable(model, lower_bound = 1, upper_bound = 1 / (2 * THIN_TOL))
+    @constraint(model, G * y .+ t .<= θ .* h)
+    @objective(model, MAX_SENSE, sum(t))
+    solve!(model)
+    is_solved_and_feasible(model) ||
+        error("the implicit-equality linear program stopped with status $(termination_status(model))")
+    return findall(<(0.5), value.(t))
 end
 
 # Whether `{z : G z ≤ h}` (nonempty) is bounded: no direction `d ≠ 0` has `G d ≤ 0`. That

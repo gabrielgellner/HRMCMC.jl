@@ -69,9 +69,10 @@ d.min_ess, d.max_rhat     # aim for max_rhat < 1.01
 - `extremes = false` (default) solves one linear program for the largest inscribed ball in
   the slice of `C * x .== d` and the fixed coordinates, and one more to check that the
   polytope is bounded. A polytope with room for a ball has no other equalities; when the
-  ball has radius zero, `warmup` falls back to `extremes = true`. `extremes = true` solves
-  `2n` linear programs for the extremes of each coordinate and finds the equalities that
-  hold throughout from them. With 1000 dense constraints in 200 dimensions and
+  ball has radius zero, one more program finds the inequalities that hold with equality,
+  and only a polytope thinner than `atol` falls back to `extremes = true`. That solves `2n`
+  linear programs for the extremes of each coordinate and finds the equalities that hold
+  throughout from them. With 1000 dense constraints in 200 dimensions and
   `prune = false`, warmup and sampling to 1000 ESS take 4 s with the default and 59 s with
   `extremes = true`.
 - `prune = true` (default) solves one linear program per bound and inequality and drops
