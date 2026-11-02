@@ -35,6 +35,12 @@ r = sample_until_converged(Xoshiro(3), t, CoordinateHitAndRun(); target_ess = 2_
 r.diagnostics.mean, r.diagnostics.mcse_mean
 ```
 
+`GaussianTarget` also stretches the chains' coordinates in each direction where the
+Gaussian is narrower than the polytope, as hops samples truncated Gaussians in coordinates
+whitened by `Σ` (`whiten = false` turns this off). A narrow, correlated Gaussian is then
+round where the chains move: with correlation 0.99 on `[-10, 10]²`, coordinate hit-and-run
+reached a minimum ESS of 8313 from 4 chains of 2000 sweeps, against 64 unwhitened.
+
 On a 10-dimensional box, coordinate hit-and-run gave 6 times the effective samples per
 second of slice sampling on the same Gaussian, and 13 times on an exponential density;
 hit-and-run gave 1.5 times on the Gaussian and the same on the exponential, where computing

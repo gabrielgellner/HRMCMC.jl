@@ -78,8 +78,8 @@ function LogDensityProblems.logdensity_and_gradient(d::FunctionLogDensity, x)
 end
 
 """
-    GaussianTarget(w::Warmup, μ, Σ)
-    GaussianTarget(P::Polytope, μ, Σ; kwargs...)
+    GaussianTarget(w::Warmup, μ, Σ; whiten = true)
+    GaussianTarget(P::Polytope, μ, Σ; whiten = true, kwargs...)
 
 The Gaussian distribution with mean `μ` and covariance `Σ` (a positive definite matrix)
 restricted to the polytope: a [`Target`](@ref) with `ℓ(x) = -(x - μ)ᵀ Σ⁻¹ (x - μ) / 2`.
@@ -89,6 +89,13 @@ On a chord the density is a truncated normal, which [`HitAndRun`](@ref) and
 [`CoordinateHitAndRun`](@ref) draw exactly, without slice sampling. The other samplers that
 take densities use `ℓ` and its gradient as for any target.
 
+With `whiten = true`, the coordinates of the warmup are stretched in each direction where the
+Gaussian is narrower than the polytope's inscribed ball, until it is as wide as the ball, as
+hops samples truncated Gaussians in coordinates whitened by `Σ`. A narrow, correlated
+Gaussian is then round in the coordinates the chains move in, and so is the polytope where
+the Gaussian is wide. On `[-10, 10]²` with correlation 0.99, `CoordinateHitAndRun` had a
+lag-1 autocorrelation near 0.98 per sweep without whitening.
+
 # Examples
 ```julia
 box = Polytope(fill(-1.0, 2), fill(1.0, 2))
@@ -96,17 +103,47 @@ t = GaussianTarget(box, [0.5, 0.0], [1.0 0.8; 0.8 1.0])
 r = sample_until_converged(Xoshiro(1), t, CoordinateHitAndRun())
 ```
 """
-function GaussianTarget(w::Warmup, μ::AbstractVector{<:Real}, Σ::AbstractMatrix{<:Real})
+function GaussianTarget(w::Warmup, μ::AbstractVector{<:Real}, Σ::AbstractMatrix{<:Real}; whiten::Bool = true)
     n = nvars(w.polytope)
     length(μ) == n || throw(DimensionMismatch("μ has length $(length(μ)), the polytope has $n variables"))
     size(Σ) == (n, n) || throw(DimensionMismatch("Σ must be $n×$n, got $(size(Σ))"))
     F = cholesky(Symmetric(Matrix{Float64}(Σ)); check = false)
     issuccess(F) || throw(ArgumentError("Σ must be positive definite"))
-    return Target(w, QuadraticLogDensity(Matrix(inv(F)), Vector{Float64}(μ), zeros(n)))
+    Qx = Matrix(inv(F))
+    whiten && (w = whitened(w, Qx))
+    return Target(w, QuadraticLogDensity(Qx, Vector{Float64}(μ), zeros(n)))
 end
 
-function GaussianTarget(P::Polytope, μ, Σ; kwargs...)
-    return GaussianTarget(warmup(P; kwargs...), μ, Σ)
+function GaussianTarget(P::Polytope, μ, Σ; whiten::Bool = true, kwargs...)
+    return GaussianTarget(warmup(P; kwargs...), μ, Σ; whiten)
+end
+
+# Adapted from hops, src/hops/MarkovChain/Proposal/TruncatedGaussianProposal.hpp (commit
+# b62592e, MIT; Copyright (c) 2020 Johann Fredrik Jadebeck, Axel Theorell, Samuel Leweke,
+# Katharina Nöh), which samples in coordinates `x = L w + μ` whitened by the Cholesky factor
+# of the covariance: `w` with its `z` coordinates stretched along each eigenvector of the
+# precision `Tᵀ Q_x T` whose standard deviation `1/√λ` is below the inscribed radius `r`, by
+# `√λ r`, so that the Gaussian has standard deviation `r` there. Full whitening, as in hops,
+# would also shrink the directions where the Gaussian is wider than the polytope, leaving
+# a thin polytope there; this stretches only.
+function whitened(w::Warmup, Qx)
+    T = w.transform
+    k = size(T, 2)
+    k == 0 && return w
+    E = eigen(Symmetric(T' * Qx * T))
+    r = w.radius > 0 ? w.radius : 1.0
+    s = max.(sqrt.(max.(E.values, 0.0)) .* r, 1.0)
+    all(==(1.0), s) && return w
+    M = E.vectors * Diagonal(1 ./ s) # z = M y
+    G = w.G * M
+    h = copy(w.h)
+    normalize_rows!(G, h)
+    zpoints = isempty(w.zpoints) ? w.zpoints : (Diagonal(s) * E.vectors') * w.zpoints
+    radius = last(chebyshev_center(G, h, w.cache.optimizer))
+    return Warmup(
+        w.polytope, w.points, w.center, T * M, G, h, zpoints, radius, true;
+        removed = w.removed, optimizer = w.cache.optimizer,
+    )
 end
 
 """
@@ -159,15 +196,20 @@ geometry(t::Target) = t.warmup
 chain_density(::Warmup) = nothing
 chain_density(t::Target) = ZDensity(t)
 
-# A log density in the coordinates `z` of a warmup, with its own buffer for `x`, so each
-# chain has one
+# A log density in the coordinates `z` of a warmup, with its own buffers for `x`, the
+# gradient and `x - μ`, so each chain has them and evaluations do not allocate
 struct ZDensity{L}
     ℓ::L
     warmup::Warmup
     x::Vector{Float64}
+    g::Vector{Float64}
+    r::Vector{Float64}
 end
 
-ZDensity(t::Target) = ZDensity(t.logdensity, t.warmup, copy(t.warmup.center))
+function ZDensity(t::Target)
+    n = length(t.warmup.center)
+    return ZDensity(t.logdensity, t.warmup, copy(t.warmup.center), zeros(n), zeros(n))
+end
 
 has_gradient(d::ZDensity) = LogDensityProblems.capabilities(d.ℓ) != LogDensityOrder{0}()
 
@@ -187,15 +229,53 @@ end
 # measure zero, so excluding those points leaves the target unchanged; a chain that moved onto
 # one could never accept another point.
 function logdensity_z(d::ZDensity, z)
-    value = Float64(LogDensityProblems.logdensity(d.ℓ, to_x!(d, z)))
+    value = logdensity_x(d, to_x!(d, z))
     return value < Inf ? value : -Inf
+end
+
+# The log density at `x + t xu`, clamped to the bounds as in `to_x!`, in `O(n)`
+function logdensity_line(d::ZDensity, x, xu, t)
+    P = d.warmup.polytope
+    for i in eachindex(d.x)
+        d.x[i] = clamp(x[i] + t * xu[i], P.lower[i], P.upper[i])
+    end
+    value = logdensity_x(d, d.x)
+    return value < Inf ? value : -Inf
+end
+
+logdensity_x(d::ZDensity, x) = Float64(LogDensityProblems.logdensity(d.ℓ, x))
+
+# `-(x - μ)ᵀ Q (x - μ) / 2 - cᵀx` in the chain's buffers, without allocating
+function logdensity_x(d::ZDensity{QuadraticLogDensity}, x)
+    q = d.ℓ
+    d.r .= x .- q.μ
+    mul!(d.g, q.Q, d.r)
+    return -dot(d.r, d.g) / 2 - dot(q.c, x)
 end
 
 # Add `scale * ∇_z ℓ(z) = scale * Tᵀ ∇_x ℓ(x)` to `out`; return ℓ(z)
 function add_gradient_z!(out, d::ZDensity, z, scale)
-    value, g = LogDensityProblems.logdensity_and_gradient(d.ℓ, to_x!(d, z))
+    value, g = logdensity_and_gradient_x!(d, to_x!(d, z))
     mul!(out, d.warmup.transform', g, scale, 1.0)
     return value < Inf ? Float64(value) : -Inf
+end
+
+logdensity_and_gradient_x!(d::ZDensity, x) = LogDensityProblems.logdensity_and_gradient(d.ℓ, x)
+
+# A function's gradient written into the chain's buffer, which a `gradient` keyword of
+# `Target` writes in place
+function logdensity_and_gradient_x!(d::ZDensity{<:FunctionLogDensity}, x)
+    d.ℓ.gradient!(d.g, x)
+    return d.ℓ.f(x), d.g
+end
+
+function logdensity_and_gradient_x!(d::ZDensity{QuadraticLogDensity}, x)
+    q = d.ℓ
+    d.r .= x .- q.μ
+    mul!(d.g, q.Q, d.r)
+    value = -dot(d.r, d.g) / 2 - dot(q.c, x)
+    d.g .= .-d.g .- q.c
+    return value, d.g
 end
 
 # A quadratic log density in the coordinates `z` of a warmup, `-zᵀ Q z / 2 - gᵀ z` up to a
