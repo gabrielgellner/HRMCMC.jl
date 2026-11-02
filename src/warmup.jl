@@ -201,8 +201,17 @@ end
 # hold with equality are fixed at their values there, so the center satisfies every constraint
 # to the solver's tolerance; a center moved onto the midpoints of their ranges could leave the
 # polytope by up to `atol`.
+#
+# The coordinate extremes need not span the polytope: on the triangle with vertices (0, 0),
+# (1, 1) and (0.5, 0.4) they are the first two, at which `x₂ ≤ x₁` is tight (#39). So every
+# inequality tight at the extreme points is checked by a linear program that maximizes its
+# slack, whose solution joins the points when the slack exceeds `atol`; and every direction
+# in which the points do not spread is measured by two programs. The equalities that hold
+# over a polytope are among its constraint rows, so the checked rows give its directions.
 function extreme_slice(P::Polytope, optimizer, atol)
     points = coordinate_extremes(P, optimizer)
+    model, x = lp_model(P, optimizer)
+    points = [points slack_points(model, x, P, points, atol)]
     center = vec(mean(points; dims = 2))
     Ceq, deq, width = active_equalities(P, points, center, atol)
     # Move the center onto `C * x .== d`, which the linear programs satisfy only to the
@@ -210,7 +219,9 @@ function extreme_slice(P::Polytope, optimizer, atol)
     if !isempty(deq)
         center .-= pinv(Ceq) * (Ceq * center .- deq)
     end
-    T, dropped = direction_basis(Ceq, points, center, atol)
+    T, D = direction_basis(Ceq, points, center, atol)
+    T, wide, dropped = keep_wide_directions(model, x, T, D, atol)
+    points = [points wide]
     width = max(width, dropped)
     if width > THIN_TOL
         @warn "warmup: fixed directions in which the polytope has width up to $(width), below atol = $(atol); its samples do not vary in them. Pass a smaller atol, such as 1e-9, to sample them." maxlog = 1
@@ -340,20 +351,63 @@ const THIN_TOL = 1.0e-8
 # constant on the slice
 const ROW_TOL = 1.0e-9
 
-# Orthonormal directions that keep `Ceq * x` fixed and along which the extreme points spread.
-# The second condition catches equalities that hold over the polytope but are not a single
-# constraint row. Entries below `ZERO_TOL` are set to zero, so that a direction moves a fixed
-# coordinate by exactly zero. A singular value counts as spread when it exceeds the
-# `sqrt(m) * atol` that `m` points each within `atol` of a hyperplane can reach.
+# Orthonormal directions that keep `Ceq * x` fixed and along which the extreme points spread,
+# and the other directions that keep `Ceq * x` fixed, in which the polytope may be thinner
+# than `atol` or the points may miss its width; `keep_wide_directions` checks those. Entries
+# below `ZERO_TOL` are set to zero, so that a direction moves a fixed coordinate by exactly
+# zero. A singular value counts as spread when it exceeds the `sqrt(m) * atol` that `m`
+# points each within `atol` of a hyperplane can reach.
 function direction_basis(Ceq, points, center, atol)
     n = length(center)
     Z = isempty(Ceq) ? Matrix{Float64}(I, n, n) : nullspace(Ceq)
-    F = svd(Z' * (points .- center))
+    F = svd(Z' * (points .- center); full = true)
     m = size(points, 2)
     k = count(>(sqrt(m) * atol), F.S)
     basis = Z * F.U[:, 1:k]
     basis[abs.(basis) .< ZERO_TOL] .= 0
-    # the spread of the points in the directions left out, comparable to a range
-    dropped = k < length(F.S) ? F.S[k + 1] / sqrt(m) : 0.0
-    return basis, dropped
+    return basis, Z * F.U[:, (k + 1):end]
+end
+
+# For each inequality whose slack is within `atol` at every point, the point of the
+# polytope that maximizes its slack, when that slack exceeds `atol`
+function slack_points(model, x, P::Polytope, points, atol)
+    A, b = unit_rows(P.A, P.b)
+    found = Vector{Float64}[]
+    for i in eachindex(b)
+        maximum(b[i] .- view(A, i, :)' * points) <= atol || continue
+        any(p -> b[i] - dot(view(A, i, :), p) > atol, found) && continue
+        @objective(model, MIN_SENSE, sum(A[i, j] * x[j] for j in axes(A, 2) if A[i, j] != 0; init = 0.0))
+        optimize!(model)
+        is_solved_and_feasible(model) || continue
+        p = value.(x)
+        b[i] - dot(view(A, i, :), p) > atol && push!(found, p)
+    end
+    return isempty(found) ? zeros(size(points, 1), 0) : reduce(hcat, found)
+end
+
+# The directions `D` in which the polytope has width above `atol`, by minimizing and
+# maximizing along each, added to the basis `T`; returns the basis, the points that reach
+# the widths, and the largest width of the directions left out
+function keep_wide_directions(model, x, T, D, atol)
+    wide = Vector{Float64}[]
+    kept = Vector{Float64}[]
+    dropped = 0.0
+    for v in eachcol(D)
+        ends = map((MIN_SENSE, MAX_SENSE)) do sense
+            @objective(model, sense, sum(v[j] * x[j] for j in eachindex(v) if v[j] != 0; init = 0.0))
+            optimize!(model)
+            value.(x)
+        end
+        w = dot(v, ends[2]) - dot(v, ends[1])
+        if w > atol
+            push!(kept, v)
+            append!(wide, ends)
+        else
+            dropped = max(dropped, w)
+        end
+    end
+    isempty(kept) && return T, zeros(size(T, 1), 0), dropped
+    V = reduce(hcat, kept)
+    V[abs.(V) .< ZERO_TOL] .= 0
+    return [T V], reduce(hcat, wide), dropped
 end

@@ -1,5 +1,5 @@
 using PolytopeSamplers: Polytope, Warmup, warmup
-using LinearAlgebra: I, norm, svdvals
+using LinearAlgebra: I, norm, rank, svdvals
 using PolytopeSamplers: PolytopeSamplers, BilliardWalk, sample, sample_until_converged
 using Random: Xoshiro
 using Test: @test_logs
@@ -110,6 +110,17 @@ include(joinpath(@__DIR__, "fixtures", "thin_foodweb.jl"))
             @test size(warmup(small; extremes).transform, 2) == 2
             @test size(warmup(large; extremes).transform, 2) == 1
         end
+    end
+
+    @testset "extreme points that miss a direction" begin
+        # The triangle with vertices (0, 0), (1, 1) and (0.5, 0.4) has every coordinate
+        # extreme at the first two, where x₂ ≤ x₁ is tight; extremes = true sampled the
+        # segment between them (#39)
+        P = Polytope([0.0, 0.0], [1.0, 1.0]; A = [-1.0 1.0; 0.8 -1.0; 1.2 -1.0], b = [0.0, 0.0, 0.2])
+        w = warmup(P; extremes = true)
+        @test size(w.transform, 2) == 2
+        @test rank(w.points .- w.points[:, 1]) == 2
+        @test all(p -> p in P, eachcol(w.points))
     end
 
     @testset "a single point" begin
