@@ -27,6 +27,14 @@ it. The chain is reversible, with the uniform distribution as its stationary dis
 A step costs `O(mk)` for `m` constraints in `k` dimensions. For a [`Target`](@ref), the
 point on the chord is drawn from the density along it by slice sampling.
 
+A step is one move along one direction, as in volesti, hops and the COBRA Toolbox. A step
+of [`CoordinateHitAndRun`](@ref) makes `k` moves, one per coordinate, at about the same
+cost, so a `HitAndRun` chain needs about `k` times as many steps to mix as well. On food web polytopes with 50 to 176 dimensions,
+[`sample_until_converged`](@ref) with `HitAndRun` stopped at `max_n` with R̂ from 1.3 to 2.9,
+while `CoordinateHitAndRun` converged in 0.2 to 3.7 s. Above a few dimensions, use
+`CoordinateHitAndRun` for a density and [`BilliardWalk`](@ref) for the uniform
+distribution, or give `HitAndRun` `thinning = k`.
+
 Smith, R. L. (1984). Efficient Monte Carlo procedures for generating points uniformly
 distributed over bounded regions. Operations Research 32, 1296–1308.
 <https://doi.org/10.1287/opre.32.6.1296>
@@ -64,9 +72,11 @@ With `scan = :cyclic` (the default, as in hopsy) the coordinates are taken in tu
 stationary; the cyclic scan gave 1.3 to 1.8 times the effective samples per move on the
 polytopes of the test suite.
 
-A move costs `O(m)` for `m` constraints, as the slacks are updated in place, and each step
-of the chain makes `moves` moves (default: the dimension `k` of the warmup), so a step costs
-about as much as one of [`HitAndRun`](@ref). Moves per effective sample grow as `k²`.
+A move costs `O(m)` for `m` constraints, as the slacks are updated in place. Each step of
+the chain makes `moves` moves (default: the dimension `k` of the warmup), a sweep over the
+coordinates that costs about as much as one step of [`HitAndRun`](@ref). hops and volesti
+count one coordinate move as a step, which `moves = 1` gives. Moves per effective sample
+grow as `k²`.
 
 A chain started exactly at a vertex never moves when no coordinate axis points into the
 polytope there, as on a simplex; [`sample`](@ref) and [`sample_until_converged`](@ref)
