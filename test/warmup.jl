@@ -3,7 +3,7 @@ using LinearAlgebra: Diagonal, I, isposdef, norm, rank, svdvals
 using PolytopeSamplers: PolytopeSamplers, BilliardWalk, sample, sample_until_converged
 using Random: Xoshiro
 using Test: @test_logs
-using JuMP: get_attribute, optimizer_with_attributes
+using JuMP: get_attribute, optimizer_with_attributes, time_limit_sec
 
 include(joinpath(@__DIR__, "fixtures", "thin_foodweb.jl"))
 include(joinpath(@__DIR__, "fixtures", "wide_range_foodweb.jl"))
@@ -336,6 +336,18 @@ include(joinpath(@__DIR__, "fixtures", "wide_range_foodweb.jl"))
         M = [1.0 0.0; 0.0 -1.0e-12]
         @test isposdef(PolytopeSamplers.nearest_spd(M))
         @test PolytopeSamplers.nearest_spd(M) ≈ [1.0 0.0; 0.0 0.0] atol = 1.0e-10
+    end
+
+    @testset "solver settings and very wide polytopes" begin
+        # Each program stops after 600 s unless the user set a limit (#88)
+        H = PolytopeSamplers.HiGHS.Optimizer
+        @test time_limit_sec(PolytopeSamplers.lp(H)) == 600.0
+        @test time_limit_sec(PolytopeSamplers.lp(optimizer_with_attributes(H, "time_limit" => 5.0))) == 5.0
+        @test get_attribute(PolytopeSamplers.lp(H), "primal_feasibility_tolerance") == 1.0e-9
+        # A polytope bounded only by a bound of 1e10 warns, as PolytopeSamplerMatlab does
+        # above 1e9; the unit cube does not
+        @test_logs (:warn, r"at least .* wide in coordinate 3") warmup(Polytope(zeros(3), [1.0, 1.0, 1.0e10]))
+        @test_logs warmup(Polytope(zeros(3), ones(3)))
     end
 
     @testset "badly scaled food web polytopes" begin
