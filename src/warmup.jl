@@ -133,7 +133,8 @@ sampler take long steps in thin directions:
   repeatedly, until it is nearly a ball. Each round factors dense matrices of size the
   number of constraints.
 - `:samples`: draw billiard-walk samples and map their principal axes to equal lengths,
-  repeatedly, as in multiphase Monte Carlo sampling. Uses `rng`.
+  repeatedly, as in multiphase Monte Carlo sampling. Runs one chain per thread and uses
+  `rng`, so a seeded result depends on `Threads.nthreads()`.
 - `:none` (or `false`).
 
 Throws an `ArgumentError` when `P` is empty or unbounded; with `extremes = false` one more

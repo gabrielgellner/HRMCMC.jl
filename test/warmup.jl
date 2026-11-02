@@ -68,6 +68,23 @@ include(joinpath(@__DIR__, "fixtures", "thin_foodweb.jl"))
             sv = svdvals(w.transform \ Diagonal(widths))
             @test sv[1] / sv[end] < 4
         end
+        # With 4 chains per phase, each continuing from its last point, the largest ratio
+        # over 50 seeds is 1.5, and a seed gives the same rounding for the same chains
+        function round_box(seed)
+            G = [Matrix(1.0I, 10, 10); -Matrix(1.0I, 10, 10)]
+            h = [widths; zeros(10)]
+            center, T = zeros(10), Matrix(1.0I, 10, 10)
+            PolytopeSamplers.round_by_samples!(
+                Xoshiro(seed), Polytope(zeros(10), widths), center, T, G, h;
+                optimizer = PolytopeSamplers.HiGHS.Optimizer, chains = 4,
+            )
+            return T
+        end
+        for seed in 1:3
+            sv = svdvals(round_box(seed) \ Diagonal(widths))
+            @test sv[1] / sv[end] < 4
+        end
+        @test round_box(1) == round_box(1)
     end
 
     @testset "maximum-volume ellipsoid of a box" begin

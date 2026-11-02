@@ -202,53 +202,88 @@ end
 #   stopped 15 of 20 seeds at ratios up to 13108 (#45).
 # - Phases draw a quarter of the samples while the last ratio exceeds NOISE_RATIO, as they
 #   only need the long axes (#37).
+# - Each phase runs one chain per thread, as dingo's parallel_mmcs does, and each chain
+#   continues from its last point mapped into the new coordinates, as hopsy's
+#   run_multiphase_sampling does (hopsy, src/hopsy/misc.py, commit 54516d7, MIT; Copyright
+#   (c) 2023 The hopsy development team). The affine map keeps the chains uniform, so only
+#   the first phase burns in (#36).
+# - The principal axes come from the eigendecomposition of the k × k matrix Z Zᵀ instead
+#   of the singular value decomposition of the k × N samples Z, which would also compute
+#   their N × k right singular vectors.
 """
     round_by_samples!(rng, P, center, T, G, h; optimizer, samples = max(20k, 1000),
-                      maxiter = 20, max_ratio = 3)
+                      maxiter = 20, max_ratio = 3, chains = Threads.nthreads())
 
 Round the polytope `x = center + T z, G z ≤ h` in place from samples: each phase draws
-`samples` points by the billiard walk from the Chebyshev center (a quarter as many while
-the polytope is far from round), takes the singular value decomposition of the centered
-samples, and stretches the coordinates so that every principal axis with at least twice the
-length of the shortest gets that length.
+`samples` points by the billiard walk on `chains` chains run in parallel threads (a quarter
+as many points while the polytope is far from round), takes the principal axes of the
+centered samples, and stretches the coordinates so that every principal axis with at least
+twice the length of the shortest gets that length. The chains start at the Chebyshev center
+and continue from their last points in later phases. For a given `rng` the result depends
+on `chains`.
 """
 function round_by_samples!(
         rng::AbstractRNG, P, center, T, G, h; optimizer, samples::Union{Nothing, Integer} = nothing,
-        maxiter::Integer = 20, max_ratio::Real = 3,
+        maxiter::Integer = 20, max_ratio::Real = 3, chains::Integer = Threads.nthreads(),
     )
     k = size(G, 2)
     k == 0 && return center, T, G, h
+    chains >= 1 || throw(ArgumentError("chains must be at least 1, got $chains"))
     N = something(samples, max(20k, 1000))
+    rngs = [Xoshiro(rand(rng, UInt64)) for _ in 1:chains]
+    # The last point of each chain, in the current coordinates
+    ends = zeros(k, chains)
     previous = Inf
-    for _ in 1:maxiter
+    for phase in 1:maxiter
         c, r = chebyshev_center(G, h, optimizer)
         shift!(center, T, G, h, c)
+        ends .-= c
         w = Warmup(P, zeros(length(center), 0), center, T, G, h, zeros(k, 0), r, false; optimizer)
-        state = chain_state(BilliardWalk(trajectory_length = 6 * sqrt(k) * r), w)
+        method = BilliardWalk(trajectory_length = 6 * sqrt(k) * r)
         n = previous > NOISE_RATIO ? max(N ÷ 4, min(N, 2k)) : N
         Z = Matrix{Float64}(undef, k, n)
-        for _ in 1:k
-            step!(rng, state)
+        burnin = phase == 1 ? k : 0
+        tasks = map(1:chains) do i
+            columns = (div((i - 1) * n, chains) + 1):div(i * n, chains)
+            Threads.@spawn billiard_chain!(rngs[i], Z, columns, view(ends, :, i), method, w, burnin)
         end
-        for j in 1:n
-            step!(rng, state)
-            Z[:, j] = state.z
-        end
+        foreach(wait, tasks)
         μ = vec(mean(Z; dims = 2))
-        F = svd(Z .- μ)
-        F.S[end] > 0 || throw(ArgumentError("the polytope has no width in some direction of its slice"))
-        s = F.S ./ F.S[end]
+        Z .-= μ
+        E = eigen(Symmetric(Z * Z'))
+        λ = reverse(E.values)
+        λ[end] > eps() * λ[1] ||
+            throw(ArgumentError("the polytope has no width in some direction of its slice"))
+        s = sqrt.(λ ./ λ[end])
         (s[1] < 2 || (s[1] <= NOISE_RATIO && s[1] > 0.9 * previous)) && break
         previous = s[1]
         s[s .< 2] .= 1
         shift!(center, T, G, h, μ)
-        L = F.U * Diagonal(s)
+        U = reverse(E.vectors; dims = 2)
+        L = U * Diagonal(s)
         T .= T * L
         G .= G * L
         normalize_rows!(G, h)
+        ends .= Diagonal(1 ./ s) * (U' * (ends .- μ))
         s[1] <= max_ratio && break
     end
     return center, T, G, h
+end
+
+# Run a billiard walk on `w` from `start`, which it updates to the last point, for `burnin`
+# steps and then one step per column of `Z` in `columns`, writing the points there
+function billiard_chain!(rng, Z, columns, start, method, w, burnin)
+    state = chain_state(method, w)
+    state.z .= start
+    for _ in 1:burnin
+        step!(rng, state)
+    end
+    for j in columns
+        step!(rng, state)
+        Z[:, j] = state.z
+    end
+    start .= state.z
+    return nothing
 end
 
 # Ratios of singular values up to this are within a few times the noise floor of
