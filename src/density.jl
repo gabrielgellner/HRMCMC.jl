@@ -234,13 +234,23 @@ end
 
 # Draw `t` on `[tmin, tmax]` from the density proportional to `exp(-a t² / 2 - b t)`, `a ≥ 0`:
 # a truncated normal, a truncated exponential when the quadratic term is negligible on the
-# chord, and uniform when both are
+# chord, and uniform when both are. When the mode `m = -b / a` lies far outside the chord,
+# `m + σ z` would lose the draw to cancellation, so a tail draw is measured from the nearer
+# end of the chord; hops instead falls back to a uniform draw when its draw leaves the chord
 function draw_quadratic(rng::AbstractRNG, a, b, tmin, tmax)
     L = tmax - tmin
     if a * L^2 > 1.0e-12
         σ = 1 / sqrt(a)
-        m = -b / a
-        return m + σ * truncated_randn(rng, (tmin - m) / σ, (tmax - m) / σ)
+        # the ends in standard units, (t - m) / σ, without forming m
+        α, β = (a * tmin + b) * σ, (a * tmax + b) * σ
+        t = if α > 0
+            tmin + σ * tail_offset(rng, α, L / σ)
+        elseif β < 0
+            tmax - σ * tail_offset(rng, -β, L / σ)
+        else
+            -b / a + σ * truncated_randn(rng, α, β)
+        end
+        return clamp(t, tmin, tmax)
     elseif abs(b) * L > 1.0e-12
         # inverse distribution function of the exponential with rate |b| from the end with
         # the larger density
@@ -259,8 +269,8 @@ end
 # Robert, C. P. (1995). Simulation of truncated normal variables. Statistics and Computing 5,
 # 121–125. <https://doi.org/10.1007/BF00143942>
 function truncated_randn(rng::AbstractRNG, α, β)
-    α > 0 && return tail_randn(rng, α, β)
-    β < 0 && return -tail_randn(rng, -β, -α)
+    α > 0 && return α + tail_offset(rng, α, β - α)
+    β < 0 && return β - tail_offset(rng, -β, β - α)
     if β - α > sqrt(2π)
         while true
             z = randn(rng)
@@ -274,19 +284,21 @@ function truncated_randn(rng::AbstractRNG, α, β)
     return
 end
 
-# A standard normal draw restricted to `[α, β]` with `0 < α < β ≤ Inf`
-function tail_randn(rng::AbstractRNG, α, β)
+# `z - α` for a standard normal draw `z` restricted to `[α, α + w]` with `α > 0`, `w ≤ Inf`.
+# Working with the offset keeps its precision when `α` is large.
+function tail_offset(rng::AbstractRNG, α, w)
     root = sqrt(α^2 + 4)
     λ = (α + root) / 2
-    if β - α > 2 * sqrt(ℯ) / (α + root) * exp((α^2 - α * root) / 4)
+    if w > 2 * sqrt(ℯ) / (α + root) * exp((α^2 - α * root) / 4)
+        δ = 2 / (α + root) # λ - α
         while true
-            z = α + randexp(rng) / λ
-            z <= β && randexp(rng) > (z - λ)^2 / 2 && return z
+            u = randexp(rng) / λ
+            u <= w && randexp(rng) > (u - δ)^2 / 2 && return u
         end
     end
     while true
-        z = α + (β - α) * rand(rng)
-        randexp(rng) > (z^2 - α^2) / 2 && return z
+        u = w * rand(rng)
+        randexp(rng) > u * (2α + u) / 2 && return u
     end
     return
 end
