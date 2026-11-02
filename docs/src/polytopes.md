@@ -81,7 +81,9 @@ ball inside the polytope, within the slice of `C x = d` and the fixed coordinate
 polytope with room for a ball of positive radius has no other equalities, and a second
 linear program checks that it is bounded. When the ball has radius zero, the polytope has
 equalities that are not written as equalities (for example `x₁ + x₂ ≤ 1` together with
-`x₁ + x₂ ≥ 1`), and `warmup` falls back to `extremes = true`.
+`x₁ + x₂ ≥ 1`). One more linear program finds them all at once (Freund, Roundy & Todd
+1985), and the ball is found again in their slice. When the polytope is still thinner than
+`atol` in some direction, `warmup` falls back to `extremes = true`, which measures it.
 
 With `extremes = true`, `warmup` solves `2n` linear programs, minimizing and maximizing each
 coordinate, and finds every equality that holds over the polytope from the extreme points.

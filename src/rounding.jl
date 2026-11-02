@@ -346,6 +346,14 @@ function round_by_samples!(
         r > 0 || error("warmup: :samples rounding found no ball inside the polytope in phase $phase")
         shift!(center, T, G, h, c)
         ends .-= c
+        # Each phase maps the long axes to the length of the shortest, so the body shrinks
+        # from phase to phase; measured in units of the inscribed radius it stays of size 1,
+        # where the solver's absolute tolerance is small. A body 4e-10 across gave Chebyshev
+        # centers outside it on #83's polytope.
+        T .*= r
+        h ./= r
+        ends ./= r
+        r = 1.0
         w = Warmup(P, zeros(length(center), 0), center, T, G, h, zeros(k, 0), r, false; optimizer)
         method = BilliardWalk(trajectory_length = 6 * sqrt(k) * r)
         n = previous > NOISE_RATIO ? max(N ÷ 4, min(N, 2k)) : N
