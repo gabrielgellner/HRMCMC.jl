@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-11-02
+
+### Breaking Changes
+
+- **density**: Turn whitening of `GaussianTarget` off by default again (`whiten = false`, as before 0.3.0): on a 282-variable food web it lowered the effective sample size of coordinate hit-and-run from 1019 to 729; pass `whiten = true` for a correlated Gaussian that lies mostly inside the polytope, where it raised it from 67 to 7797 (#52)
+
 ## [0.3.0] - 2026-11-02
 
 ### Breaking Changes

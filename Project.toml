@@ -1,6 +1,6 @@
 name = "PolytopeSamplers"
 uuid = "23957194-1ca4-53c5-ae50-e0ed682cc5dc"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Gabriel Gellner <gabrielgellner@gmail.com>"]
 
 [workspace]
