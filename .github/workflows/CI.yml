@@ -1,9 +1,11 @@
 name: CI
 # The repository is public, so GitHub-hosted runners are free. `just ci` runs the same checks
-# locally.
+# locally. Pull requests test on Linux only, as macOS runners often queue for many minutes;
+# main and release tags also test on macOS, which caught a platform-dependent test in #78.
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 concurrency:
@@ -15,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2

@@ -39,9 +39,22 @@ docs:
 stress:
     {{ julia }} --project=test test/stress.jl
 
-# Run every check (format, lint, tests); run before every push and merge, as there is no
-# hosted CI
+# Run every check (format, lint, tests); run before every push and merge
 ci: fmt-check lint test
+
+# Run the tests in a copy of the repository without its manifests, so that every environment
+# is resolved from scratch as on CI and for users; this catches compat bounds that a local
+# manifest hides, as a FoodWebs bound did in #82. Run it before a release or after changing
+# a dependency or a compat entry.
+ci-fresh:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    git ls-files -co --exclude-standard | rsync -a --files-from=- . "$tmp"
+    cd "$tmp"
+    {{ julia }} --project=examples -e 'using Pkg; Pkg.instantiate()'
+    {{ julia }} --project -e 'using Pkg; Pkg.test()'
 
 # ── Release ───────────────────────────────────────────────────────────────────
 
