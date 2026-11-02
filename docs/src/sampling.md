@@ -47,7 +47,7 @@ The `internals` section holds the statistics of each step, from `AbstractMCMC.ge
 | [`BilliardWalk`](@ref) | `n_reflections`, the reflections in the step |
 | [`DikinWalk`](@ref), [`VaidyaWalk`](@ref) | `is_accept`, and `acceptance_rate` so far |
 | [`CRHMC`](@ref) | `is_accept`, `acceptance_rate` and `step_size` |
-| [`HitAndRun`](@ref), [`CoordinateHitAndRun`](@ref) with a [`Target`](@ref) | `n_evaluations`, the log-density evaluations of the slice sampler |
+| [`HitAndRun`](@ref), [`CoordinateHitAndRun`](@ref) with a [`Target`](@ref) | `n_evaluations`, the log-density evaluations of the slice sampler, and `n_exhausted`, the slice updates that gave up after 200 shrinkage steps and left the point where it was |
 
 With a [`Target`](@ref), every sampler also reports `lp`, the log density at the point.
 The uniform hit-and-run methods report none.

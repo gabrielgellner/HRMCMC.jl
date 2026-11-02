@@ -41,7 +41,37 @@ end
             s = AbstractMCMC.getstats(c)
             @test s.lp ≈ LogDensityProblems.logdensity(t.logdensity, c.x)
             m isa Union{HitAndRun, CoordinateHitAndRun} && @test s.n_evaluations >= 1
+            m isa Union{HitAndRun, CoordinateHitAndRun} && @test s.n_exhausted == 0
         end
+    end
+
+    @testset "starts where the density is zero ($m)" for m in density_methods
+        # The density is zero on x₁ < 0.5, which covers half of the ball of random starts.
+        # Random starts are drawn again until the density is positive; a chain started
+        # where it is zero throws, as it would accept every point of its first chord (#70)
+        w = warmup(Polytope(zeros(2), ones(2)))
+        ℓ(x) = x[1] >= 0.5 ? 0.0 : -Inf
+        t = Target(w, ℓ; gradient = (g, x) -> (g .= 0; ℓ(x)))
+        for seed in 1:20
+            c = PolytopeSamplers.start_state(m, t, Xoshiro(seed))
+            @test c.x[1] >= 0.5
+        end
+        @test_throws ArgumentError sample(Xoshiro(1), t, m, 10; initial_params = [0.2, 0.5], progress = false)
+        # No random start in the ball has positive density
+        far = Target(w, x -> x[1] > 0.99 ? 0.0 : -Inf; gradient = (g, x) -> (g .= 0; x[1] > 0.99 ? 0.0 : -Inf))
+        @test_throws ArgumentError sample(Xoshiro(1), far, m, 10; progress = false)
+    end
+
+    @testset "exhausted slices are counted" begin
+        # Shrinkage ends at the current point unless its density has changed since it was
+        # evaluated, so this log density is finite on its first call only: every point of
+        # the slice is rejected and the chain stays put
+        calls = Ref(0)
+        t = Target(Polytope(zeros(2), ones(2)), x -> (calls[] += 1) == 1 ? 0.0 : -Inf)
+        c = PolytopeSamplers.start_state(HitAndRun(), t, [0.5, 0.5])
+        PolytopeSamplers.step!(Xoshiro(1), c)
+        @test AbstractMCMC.getstats(c).n_exhausted == 1
+        @test c.x == [0.5, 0.5]
     end
 
     @testset "Target" begin
