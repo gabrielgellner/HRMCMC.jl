@@ -58,7 +58,30 @@ equalities that are not written as equalities (for example `x₁ + x₂ ≤ 1` t
 With `extremes = true`, `warmup` solves `2n` linear programs, minimizing and maximizing each
 coordinate, and finds every equality that holds over the polytope from the extreme points.
 This costs far more for large `n`: with 1000 constraints in 200 dimensions the `2n`
-programs take 58 s, against 1.3 s for the whole default warmup.
+programs take 58 s, against 1.3 s for the whole warmup with `prune = false`.
+
+### Redundant constraints: `prune`
+
+A constraint is redundant when removing it leaves the polytope unchanged, as for a bound
+that the other constraints never reach, or reach only at a single vertex. Each step of every
+sampler costs time in proportion to the number of constraints, so with `prune = true` (the
+default) `warmup` solves one linear program per finite bound and inequality and leaves the
+redundant ones out of `G` and `h`. It uses the test of PolyRound: raise the right-hand side
+by 1 and check whether the maximum over the polytope still meets the original. `w.polytope`
+keeps every constraint, and `w.removed` counts those left out. The upper bounds of the
+triangle are reached only at its vertices:
+
+```@example polytopes
+triangle = Polytope([0.0, 0.0], [1.0, 1.0]; A = [1.0 1.0], b = [1.0])
+w = warmup(triangle)
+size(w.G), w.removed
+```
+
+On a food web with 282 variables, pruning removes 502 of 796 constraints and the warmup
+takes 6.4 s instead of 16.2 s, as ellipsoid rounding factors matrices of the size of the
+number of constraints. The programs are slow when `A` is dense: with 200 variables and 1000
+dense inequalities, all of them needed, they took 90 times as long as the rest of the
+warmup. Pass `prune = false` for such polytopes.
 
 ### Rounding
 

@@ -119,10 +119,10 @@ function lp(optimizer)
     return model
 end
 
-# A JuMP model with the constraints of `P` and no objective. Constraints are built from the
-# nonzero coefficients, as the matrices of food web problems are mostly zeros, and from rows
-# of unit norm, so that the solver's feasibility tolerance is a distance in `x` (PolyRound
-# normalizes its rows too).
+# A JuMP model with the constraints of `P` and no objective, its variables and the rows of
+# `A * x .<= b`. Constraints are built from the nonzero coefficients, as the matrices of food
+# web problems are mostly zeros, and from rows of unit norm, so that the solver's feasibility
+# tolerance is a distance in `x` (PolyRound normalizes its rows too).
 function lp_model(P::Polytope, optimizer)
     model = lp(optimizer)
     n = nvars(P)
@@ -133,13 +133,13 @@ function lp_model(P::Polytope, optimizer)
         isfinite(P.lower[i]) && set_lower_bound(x[i], P.lower[i])
         isfinite(P.upper[i]) && set_upper_bound(x[i], P.upper[i])
     end
-    for i in eachindex(b)
+    rows = map(eachindex(b)) do i
         @constraint(model, sum(A[i, j] * x[j] for j in 1:n if A[i, j] != 0; init = 0.0) <= b[i])
     end
     for i in eachindex(d)
         @constraint(model, sum(C[i, j] * x[j] for j in 1:n if C[i, j] != 0; init = 0.0) == d[i])
     end
-    return model, x
+    return model, x, rows
 end
 
 """

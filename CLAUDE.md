@@ -10,7 +10,8 @@ use is sampling the interaction strengths of food webs consistent with an equili
 
 - `src/polytope.jl`: `Polytope` (`lower .<= x .<= upper`, `A * x .<= b`, `C * x .== d`),
   `isfeasible`, `isempty`, and the JuMP model of a polytope.
-- `src/warmup.jl`: `warmup`, which by default solves one Chebyshev-center program and one
+- `src/warmup.jl`: `warmup`, which by default removes redundant bounds and inequalities (one
+  program each, `prune`), solves one Chebyshev-center program and one
   boundedness program (or, with `extremes = true`, the `2n` coordinate programs), finds the
   equalities that hold over the polytope (explicit, fixed coordinates, tight inequalities),
   and writes the polytope as `x = center + transform * z`, `G z ≤ h` with unit-norm rows.
