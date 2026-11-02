@@ -115,6 +115,7 @@ shifted seeds before trusting it.
 just setup      # install Runic and JETLS as Julia apps, instantiate environments
 just fmt        # format with Runic
 just ci         # formatting check, JETLS lint and tests; run before every push and merge
+just ci-fresh   # the tests with every environment resolved from scratch, before a release
 just stress     # convergence stress tests (about 10 minutes)
 just docs       # build the documentation
 just example constrained_foodweb
@@ -122,10 +123,14 @@ just example constrained_foodweb
 
 ## Checks
 
-GitHub Actions runs `.github/workflows/CI.yml` (tests on Linux and macOS, Runic, JETLS) on
-pull requests and on `main`, and `Docs.yml` builds the manual on pull requests and deploys
-it to the `gh-pages` branch from `main` and release tags. The repository is public, so the
-runners are free. Run `just ci` before pushing, and merge only when CI is green.
+GitHub Actions runs `.github/workflows/CI.yml` (tests, Runic, JETLS) on pull requests, `main`
+and release tags, and `Docs.yml` builds the manual on pull requests and deploys it to the
+`gh-pages` branch from `main` and release tags. Pull requests test on Linux only, as macOS
+runners queue for many minutes; `main` and release tags also test on macOS. The repository
+is public, so the runners are free. Run `just ci` before pushing, and merge when the pull
+request's checks are green. After merging, check the macOS run on `main` and fix a failure
+before the next release. Before a release, or after changing a dependency or a compat
+entry, run `just ci-fresh`, which resolves every environment from scratch.
 
 ## Commits
 
