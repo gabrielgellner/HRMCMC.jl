@@ -160,7 +160,7 @@ function step!(rng::AbstractRNG, c::BarrierState)
         move_inside!(c.z, c.slack, w.h) && update_slack!(c)
         c.logdet = factor_hessian!(c.U, c, c.slack)
         isfinite(c.logdet) || throw(ArgumentError("the chain must start strictly inside the polytope"))
-        c.logp = logdensity_or_zero(c.density, c.z)
+        c.logp = start_logdensity(c.density, c.z)
         c.ready = true
     end
     randn!(rng, c.step)

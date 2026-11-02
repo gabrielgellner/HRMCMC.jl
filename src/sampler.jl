@@ -133,13 +133,16 @@ mutable struct HitAndRunState{M <: AbstractHitAndRun, D}
     steps::Int # steps taken, for refreshing the slacks
     next_coordinate::Int # for the cyclic scan
     evaluations::Int # log-density evaluations in the last step
+    exhausted::Int # slice updates in the last step that gave up and stayed put
 end
 
 chain_state(method::AbstractHitAndRun, w::Warmup) = HitAndRunState(method, w, nothing)
 
 AbstractMCMC.getparams(c::HitAndRunState) = copy(c.x)
 AbstractMCMC.getstats(::HitAndRunState{<:AbstractHitAndRun, Nothing}) = (;)
-AbstractMCMC.getstats(c::HitAndRunState) = (; lp = c.logp, n_evaluations = c.evaluations)
+function AbstractMCMC.getstats(c::HitAndRunState)
+    return (; lp = c.logp, n_evaluations = c.evaluations, n_exhausted = c.exhausted)
+end
 # Exact chord draws keep no log density, so this evaluates it once, outside the step
 function AbstractMCMC.getstats(c::HitAndRunState{<:AbstractHitAndRun, ZQuadratic})
     return (; lp = logdensity_z(c.density.density, c.z))
@@ -160,7 +163,7 @@ function HitAndRunState(method::AbstractHitAndRun, w::Warmup, density)
     center = isempty(zpoints) ? zeros(k) : vec(mean(zpoints; dims = 2))
     return HitAndRunState(
         method, w, density, zeros(k), NaN, zeros(k), copy(w.center), zeros(k), copy(w.h),
-        zeros(m), center, zpoints, size(zpoints, 2), 0, 1, 0,
+        zeros(m), center, zpoints, size(zpoints, 2), 0, 1, 0, 0,
     )
 end
 
@@ -223,14 +226,15 @@ end
 
 function draw_on_chord(rng, c::HitAndRunState{<:AbstractHitAndRun, <:ZDensity}, tmin, tmax, direction)
     if isnan(c.logp)
-        c.logp = logdensity_z(c.density, c.z)
+        c.logp = start_logdensity(c.density, c.z)
         c.evaluations += 1
     end
     function logp(t)
         c.evaluations += 1
         return logdensity_z(c.density, chord_point!(c.zt, c.z, t, direction))
     end
-    t, c.logp = slice_on_chord(rng, logp, c.logp, tmin, tmax)
+    t, c.logp, exhausted = slice_on_chord(rng, logp, c.logp, tmin, tmax)
+    c.exhausted += exhausted
     return t
 end
 
@@ -252,6 +256,7 @@ end
 function step!(rng::AbstractRNG, c::HitAndRunState)
     w = c.warmup
     c.evaluations = 0
+    c.exhausted = 0
     if direction!(rng, c)
         refresh_slack!(c)
         mul!(c.Gu, w.G, c.u)
@@ -273,6 +278,7 @@ end
 function step!(rng::AbstractRNG, c::HitAndRunState{CoordinateHitAndRun})
     w = c.warmup
     c.evaluations = 0
+    c.exhausted = 0
     k = length(c.z)
     if k > 0
         refresh_slack!(c)
@@ -350,18 +356,25 @@ end
 # A chain state at a uniform random point of the largest ball around the warmup center
 # `z = 0` inside the polytope. Its radius is the smallest slack `minimum(h)`, as the rows of
 # `G` have unit norm; `w.radius` belongs to the Chebyshev ball, whose center is `z = 0` only
-# without rounding or extreme points
+# without rounding or extreme points. For a target that is zero on part of the ball, the
+# point is drawn again, up to START_TRIES times, until the density there is positive.
 function start_state(method::PolytopeSampler, model, rng::AbstractRNG)
     w = geometry(model)
     state = chain_state(method, model)
     k = length(state.z)
     if k > 0 && !isempty(w.h)
-        u = randn(rng, k)
+        density = hasfield(typeof(state), :density) ? state.density : nothing
         r = max(minimum(w.h), 0.0)
-        state.z .= u .* (r * rand(rng)^(1 / k) / norm(u))
+        for _ in 1:START_TRIES
+            u = randn(rng, k)
+            state.z .= u .* (r * rand(rng)^(1 / k) / norm(u))
+            positive_start(density, state.z) && break
+        end
     end
     return update_x!(state)
 end
+
+const START_TRIES = 100
 
 # A chain state at `x`, a point of the polytope in its original coordinates. A feasible `x`
 # satisfies every equality that holds over the polytope, so it lies on `center + transform * z`.

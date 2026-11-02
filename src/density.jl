@@ -313,8 +313,9 @@ const SLICE_MAX = 200
 
 Draw `t` from the density proportional to `exp(logp(t))` on `[tmin, tmax]`, a chord through
 the current point `t = 0` whose log density is `logp0`, by slice sampling with shrinkage
-(Neal 2003, Section 4.2.2, with the whole chord as the initial interval). Returns `t` and
-`logp(t)`.
+(Neal 2003, Section 4.2.2, with the whole chord as the initial interval). Returns `t`,
+`logp(t)` and whether the update gave up after `SLICE_MAX` shrinkage steps and stayed at
+`t = 0`.
 
 Neal, R. M. (2003). Slice sampling. Annals of Statistics 31, 705–767.
 <https://doi.org/10.1214/aos/1056562461>
@@ -324,16 +325,30 @@ function slice_on_chord(rng::AbstractRNG, logp, logp0, tmin, tmax)
     for _ in 1:SLICE_MAX
         t = tmin + (tmax - tmin) * rand(rng)
         lp = logp(t)
-        lp > logy && return t, lp
+        lp > logy && return t, lp, false
         if t < 0
             tmin = t
         else
             tmax = t
         end
     end
-    return 0.0, logp0
+    return 0.0, logp0, true
 end
 
 # The log density at `z`, zero for the uniform distribution
 logdensity_or_zero(::Nothing, z) = 0.0
 logdensity_or_zero(d::ZDensity, z) = logdensity_z(d, z)
+
+# The log density at the start of a chain. A chain started where the density is zero, or
+# infinite or NaN, accepts every finite point on its first chord or stays there for ever; hops
+# also throws (TruncatedGaussianProposal.hpp:117-119)
+function start_logdensity(d, z)
+    logp = logdensity_or_zero(d, z)
+    logp > -Inf || throw(ArgumentError("the log density is not finite at the start of the chain; pass initial_params where the density is positive"))
+    return logp
+end
+
+# Whether a random start may be kept: the log density there is finite. The uniform
+# distribution and quadratic log densities are finite everywhere in the polytope
+positive_start(d, z) = true
+positive_start(d::ZDensity, z) = logdensity_z(d, z) > -Inf
