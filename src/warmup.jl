@@ -1,8 +1,9 @@
 # Values computed on first use and shared by the chains of a warmup, under the lock: Gᵀ and
-# G Gᵀ for the billiard walk, and the extreme points in `z` for ACHR when the warmup was
-# built without them
+# G Gᵀ for the billiard walk, and the extreme points in `x` and `z` for `ranges` and ACHR
+# when the warmup was built without them
 mutable struct WarmupCache
     reflections::Union{Nothing, Tuple{Matrix{Float64}, Matrix{Float64}}}
+    points::Union{Nothing, Matrix{Float64}}
     zpoints::Union{Nothing, Matrix{Float64}}
     const optimizer::Any
     const lock::ReentrantLock
@@ -49,7 +50,7 @@ function Warmup(
     )
     return Warmup(
         P, points, center, transform, G, h, zpoints, radius, rounded,
-        WarmupCache(nothing, nothing, optimizer, ReentrantLock()),
+        WarmupCache(nothing, nothing, nothing, optimizer, ReentrantLock()),
     )
 end
 
@@ -65,21 +66,65 @@ function reflection_matrices(w::Warmup)
     end
 end
 
-# The extreme points of each coordinate in `z`: `w.zpoints`, or, for a warmup built without
-# them, the `2n` linear programs solved once on first use. A warmup built from the largest
-# inscribed ball has no equalities beyond those of its slice, so the points lie in it.
+# The extreme points of each coordinate: `w.points`, or, for a warmup built without them,
+# the `2n` linear programs solved once on first use
+function extreme_points(w::Warmup)
+    isempty(w.points) || return w.points
+    cache = w.cache
+    return lock(cache.lock) do
+        if cache.points === nothing
+            cache.points = coordinate_extremes(w.polytope, cache.optimizer)
+        end
+        cache.points
+    end
+end
+
+# The extreme points of each coordinate in `z`. A warmup built from the largest inscribed
+# ball has no equalities beyond those of its slice, so the points lie in it.
 function extreme_zpoints(w::Warmup)
     isempty(w.zpoints) || return w.zpoints
     size(w.transform, 2) == 0 && return w.zpoints
+    points = extreme_points(w)
     cache = w.cache
     return lock(cache.lock) do
         if cache.zpoints === nothing
-            points = coordinate_extremes(w.polytope, cache.optimizer)
             cache.zpoints = w.transform \ (points .- w.center)
         end
         cache.zpoints
     end
 end
+
+"""
+    ranges(P::Polytope; optimizer = HiGHS.Optimizer)
+    ranges(w::Warmup)
+
+The smallest and largest value of each coordinate over the polytope, as the vectors
+`(lower, upper)`, from the `2n` linear programs that minimize and maximize each coordinate.
+Metabolic modeling calls this flux variability analysis. A coordinate with
+`lower[i] == upper[i]` is fixed by the constraints, and a narrow range means that the
+constraints nearly determine it.
+
+For a warmup the extreme points of `warmup(P; extremes = true)` give the ranges without
+further programs. Otherwise the programs are solved on first use and kept in the warmup for
+later calls and for [`ACHR`](@ref) chains.
+
+The ranges of samples lie inside these and can fall well short of them in thin corners of
+the polytope.
+
+# Examples
+```jldoctest
+julia> lower, upper = ranges(Polytope([0.0, 0.0], [1.0, 1.0]; A = [2.0 1.0], b = [1.0]));
+
+julia> upper
+2-element Vector{Float64}:
+ 0.5
+ 1.0
+```
+"""
+ranges(P::Polytope; optimizer = HiGHS.Optimizer) = point_ranges(coordinate_extremes(P, optimizer))
+ranges(w::Warmup) = point_ranges(extreme_points(w))
+
+point_ranges(points) = (vec(minimum(points; dims = 2)), vec(maximum(points; dims = 2)))
 
 # The coordinates that do not vary on the slice of a warmup: explicit equalities, equal bounds,
 # and the equalities that `warmup` finds to hold over the polytope, within `atol`
