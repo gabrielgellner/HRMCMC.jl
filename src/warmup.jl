@@ -256,8 +256,8 @@ an error naming its status. After rounding, `warmup` warns when the polytope is 
 PolytopeSamplerMatlab).
 
 `optimizer` is any JuMP optimizer for linear programs. `warmup` sets the feasibility
-tolerances of HiGHS and Gurobi to `1e-9` and warns for other solvers, whose tolerances
-should be set through `optimizer_with_attributes`; each program stops after 600 s unless a
+tolerances of HiGHS to `1e-9` and warns for other solvers, whose tolerances should be set
+through `optimizer_with_attributes`; each program stops after 600 s unless a
 time limit is set there. Each call builds its own models, so separate tasks may call
 `warmup` at the same time.
 """
