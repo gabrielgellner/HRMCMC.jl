@@ -35,12 +35,15 @@ simplex20 = Polytope(zeros(20), ones(20); C = ones(1, 20), d = [1.0])
         @test all(x -> x ≈ [0.3, 0.6], eachcol(X))
     end
 
-    @testset "flat polytopes fall back to extreme points" begin
-        # x1 + x2 ≤ 1 and x1 + x2 ≥ 1: the largest ball has radius zero
+    @testset "flat polytopes find their equalities" begin
+        # x1 + x2 ≤ 1 and x1 + x2 ≥ 1: the largest ball has radius zero, and one more program
+        # finds the equality (#46), without the extreme points of extremes = true
         P = Polytope([0.0, 0.0], [1.0, 1.0]; A = [1.0 1.0; -1.0 -1.0], b = [1.0, -1.0])
         w = warmup(P; extremes = false)
-        @test size(w.points, 2) > 0
+        @test isempty(w.points)
         @test size(w.transform, 2) == 1
+        X = sample(Xoshiro(1), w, BilliardWalk(), 100; progress = false)
+        @test all(x -> abs(x[1] + x[2] - 1) < 1.0e-9, eachcol(X))
     end
 
     @testset "errors" begin

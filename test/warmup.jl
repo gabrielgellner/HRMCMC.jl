@@ -149,14 +149,15 @@ include(joinpath(@__DIR__, "fixtures", "wide_range_foodweb.jl"))
         @test lower ≈ [0, 0, 0.5, 0] atol = 1.0e-9
         @test upper ≈ [1, 1, 0.5, 1] atol = 1.0e-9
         # A warmup with extreme points uses them; one without solves the programs once and
-        # shares them with ACHR. P has an equality that is not written as one, so its default
-        # warmup falls back to extreme points
+        # shares them with ACHR. P has an equality that is not written as one, which the
+        # default warmup finds by one program (#46), without extreme points
         for Q in (box, simplex, P)
             exact = ranges(Q)
             @test all(isapprox.(ranges(warmup(Q; extremes = true)), exact; atol = 1.0e-9))
             w = warmup(Q)
+            @test isempty(w.points)
             @test all(isapprox.(ranges(w), exact; atol = 1.0e-9))
-            @test (w.cache.points === nothing) == (Q === P)
+            @test w.cache.points !== nothing
             # ACHR's points start with the extreme points of each coordinate
             E = PolytopeSamplers.extreme_points(w)
             @test PolytopeSamplers.extreme_zpoints(w)[:, 1:size(E, 2)] ≈ w.transform \ (E .- w.center)
@@ -288,6 +289,29 @@ include(joinpath(@__DIR__, "fixtures", "wide_range_foodweb.jl"))
         # Polytopes whose coefficients are near 1 are left as they are
         @test PolytopeSamplers.scaled_polytope(Polytope(zeros(3), ones(3); A = ones(1, 3), b = [1.0]))[2] == ones(3)
         @test PolytopeSamplers.scaled_polytope(Polytope(zeros(2), ones(2)))[2] == ones(2)
+    end
+
+    @testset "implicit equalities from one linear program" begin
+        # x = 1 written as x ≤ 1 and x ≥ 1, with 0 ≤ y ≤ 1: the first two rows always hold
+        # with equality (Freund, Roundy & Todd 1985)
+        G = [1.0 0.0; -1.0 0.0; 0.0 1.0; 0.0 -1.0]
+        @test PolytopeSamplers.implicit_equalities(G, [1.0, -1.0, 1.0, 0.0], PolytopeSamplers.HiGHS.Optimizer) == [1, 2]
+        @test isempty(PolytopeSamplers.implicit_equalities(G, [1.0, 0.0, 1.0, 0.0], PolytopeSamplers.HiGHS.Optimizer))
+        # An equality hidden among the inequalities no longer needs the 2n coordinate programs
+        # of extremes = true (#46): warmup finds it, restricts the slice and rounds
+        P = Polytope(zeros(3), ones(3); A = [1.0 1.0 0.0; -1.0 -1.0 0.0], b = [1.0, -1.0])
+        w = warmup(Xoshiro(1), P)
+        @test isempty(w.points)
+        @test size(w.transform, 2) == 2
+        X = sample(Xoshiro(2), w, BilliardWalk(), 200; progress = false)
+        @test all(x -> abs(x[1] + x[2] - 1) < 1.0e-9 && x in P, eachcol(X))
+        # A direction about 1e-7 wide is thinner than atol = 1e-6 but wider than the solver's
+        # accuracy, so it is not an equality: warmup falls back to the extreme points, which
+        # measure it against atol and fix it with a warning
+        thin = Polytope(zeros(2), ones(2); A = [1.0 -1.0; -1.0 1.0], b = [1.0e-7, 1.0e-7])
+        wt = @test_logs (:warn, r"fixed directions") match_mode = :any warmup(thin; atol = 1.0e-6)
+        @test !isempty(wt.points)
+        @test size(wt.transform, 2) == 1
     end
 
     @testset "numerical safeguards from the reference samplers" begin
