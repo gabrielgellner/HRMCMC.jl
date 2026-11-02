@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-11-02
+
+### Breaking Changes
+
+- **density**: Whiten `GaussianTarget` by default (`whiten = true`): the chains move in coordinates stretched where the Gaussian is narrower than the polytope, so a seed gives different chains from the same distribution; `whiten = false` keeps the polytope's coordinates (#52)
+
+### Features
+
+- **warmup**: Find the inequalities that hold with equality by one linear program (Freund, Roundy & Todd 1985) instead of the 2n coordinate programs (#46)
+- **warmup**: Time out every solver through `TimeLimitSec`, warn when a solver other than HiGHS keeps its default tolerances, and warn for polytopes wider than 1e9 (#88)
+
+### Performance
+
+- **rounding**: Factor the ellipsoid's Newton system by Cholesky, cap its iterations as PolyRound does, and start rounds from the last ellipsoid's center; rounding the 1082-variable food web takes 14 s instead of 33 s (#47)
+- **sampler**: Compute x only for the points that sample keeps, and keep ACHR's running mean out of the other samplers (#50)
+- **density**: Whiten Gaussian targets, evaluate slice densities in O(n) instead of O(nk), and keep density steps allocation free; a coordinate hit-and-run step with a density on a 282-variable food web takes 129 μs instead of 2657 μs (#52)
+
+### Bug Fixes
+
+- **sampler**: Give ACHR at least 2k warmup points spanning the polytope, as the COBRA Toolbox does; with few extreme points its means were biased while R̂ looked converged (#50)
+- **rounding**: Keep :samples rounding in units of the inscribed radius, so that the body does not shrink below the solver's tolerance
+
 ## [0.2.0] - 2026-11-02
 
 ### Breaking Changes
