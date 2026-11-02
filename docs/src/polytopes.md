@@ -72,6 +72,8 @@ coordinates `z` so that the polytope is close to round:
   repeatedly, as in multiphase Monte Carlo sampling ([`mmcs`](@ref)). Ellipsoid rounding
   was faster at every size tested (10 s against 121 s with 2000 constraints in 400
   dimensions); sample rounding avoids the dense `m × m` matrices of the ellipsoid method.
+  Each round runs one billiard-walk chain per thread (start Julia with `--threads`), so a
+  seeded warmup depends on the number of threads.
 - `:none`.
 
 A box with sides from `1e-3` to `1e3` rounds to a cube:
