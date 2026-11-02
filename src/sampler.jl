@@ -123,7 +123,7 @@ mutable struct HitAndRunState{M <: AbstractHitAndRun, D}
     const method::M
     const warmup::Warmup
     const density::D # nothing for the uniform distribution
-    const zt::Vector{Float64} # a point on the chord, for the density
+    const xu::Vector{Float64} # transform * u, the direction in x, for the density
     logp::Float64 # log density at z, NaN until computed
     const z::Vector{Float64}
     const x::Vector{Float64} # center + transform * z
@@ -165,7 +165,7 @@ function HitAndRunState(method::AbstractHitAndRun, w::Warmup, density)
     zpoints = method isa ACHR ? extreme_zpoints(w) : w.zpoints
     center = isempty(zpoints) ? zeros(k) : vec(mean(zpoints; dims = 2))
     return HitAndRunState(
-        method, w, density, zeros(k), NaN, zeros(k), copy(w.center), zeros(k), copy(w.h),
+        method, w, density, zeros(length(w.center)), NaN, zeros(k), copy(w.center), zeros(k), copy(w.h),
         zeros(m), center, zpoints, size(zpoints, 2), 0, 1, 0, 0,
     )
 end
@@ -228,31 +228,38 @@ function draw_on_chord(rng, c::HitAndRunState{<:AbstractHitAndRun, ZQuadratic}, 
     return draw_quadratic(rng, chord_coefficients(c.density, c.z, direction)..., tmin, tmax)
 end
 
+# Each evaluation costs `O(n)`: `c.x` is current at the start of the move (see
+# `prepare_density!`), the direction in `x` is `T u` (column `j` of `T` for a coordinate
+# move), and a point of the chord is `x + t T u`. Recomputing `x = center + T z` for each
+# evaluation cost `O(nk)` (#52). `c.x` moves with the chain.
 function draw_on_chord(rng, c::HitAndRunState{<:AbstractHitAndRun, <:ZDensity}, tmin, tmax, direction)
     if isnan(c.logp)
         c.logp = start_logdensity(c.density, c.z)
         c.evaluations += 1
     end
+    xu = x_direction!(c, direction)
     function logp(t)
         c.evaluations += 1
-        return logdensity_z(c.density, chord_point!(c.zt, c.z, t, direction))
+        return logdensity_line(c.density, c.x, xu, t)
     end
     t, c.logp, exhausted = slice_on_chord(rng, logp, c.logp, tmin, tmax)
     c.exhausted += exhausted
+    for i in eachindex(c.x)
+        c.x[i] += t * xu[i]
+    end
     return t
 end
 
-function chord_point!(zt, z, t, u::AbstractVector)
-    for i in eachindex(zt)
-        zt[i] = z[i] + t * u[i]
-    end
-    return zt
-end
+x_direction!(c, u::AbstractVector) = mul!(c.xu, c.warmup.transform, u)
+x_direction!(c, j::Integer) = view(c.warmup.transform, :, j)
 
-function chord_point!(zt, z, t, j::Integer)
-    copyto!(zt, z)
-    zt[j] += t
-    return zt
+# A density move needs `c.x` current. Each move keeps it so, and it is recomputed from `z`
+# every SLACK_REFRESH steps, as the slacks are, so that rounding error does not accumulate;
+# the uniform distribution leaves `x` stale between kept points instead
+prepare_density!(c::HitAndRunState) = c
+function prepare_density!(c::HitAndRunState{<:AbstractHitAndRun, <:ZDensity})
+    c.steps % SLACK_REFRESH == 0 && update_x!(c)
+    return c
 end
 
 # One step: move `c.z` along a new direction to a point on the chord, uniform or drawn
@@ -261,6 +268,7 @@ function advance!(rng::AbstractRNG, c::HitAndRunState)
     w = c.warmup
     c.evaluations = 0
     c.exhausted = 0
+    prepare_density!(c)
     if direction!(rng, c)
         refresh_slack!(c)
         mul!(c.Gu, w.G, c.u)
@@ -292,6 +300,7 @@ function advance!(rng::AbstractRNG, c::HitAndRunState{CoordinateHitAndRun})
     w = c.warmup
     c.evaluations = 0
     c.exhausted = 0
+    prepare_density!(c)
     k = length(c.z)
     if k > 0
         refresh_slack!(c)
@@ -459,7 +468,7 @@ copy_state(c::T) where {T} = T((copy_field(c, f) for f in fieldnames(T))...)
 # Gᵀ, G Gᵀ and the extreme points are shared by the chains of a warmup and never written
 copy_field(c, f) = f in (:Gt, :GG, :zpoints) ? getfield(c, f) : copy_value(getfield(c, f))
 copy_value(x::Array) = copy(x)
-copy_value(d::ZDensity) = ZDensity(d.ℓ, d.warmup, copy(d.x))
+copy_value(d::ZDensity) = ZDensity(d.ℓ, d.warmup, copy(d.x), copy(d.g), copy(d.r))
 copy_value(d::ZQuadratic) = ZQuadratic(copy_value(d.density), d.Q, d.g, copy(d.Qu))
 copy_value(x) = x
 

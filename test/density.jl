@@ -6,6 +6,7 @@ using Distributions: Gamma, Normal, cdf, truncated
 using JET: @test_opt
 using LogDensityProblems: LogDensityProblems, LogDensityOrder
 using Random: Xoshiro
+using LinearAlgebra: I
 using Statistics: cor, mean, std
 
 const density_methods = (
@@ -232,6 +233,53 @@ end
             @test_opt PolytopeSamplers.step!(rng, c)
             @test isempty(check_allocs(PolytopeSamplers.step!, (typeof(rng), typeof(c))))
         end
+    end
+
+    @testset "density steps are allocation free ($m)" for m in density_methods
+        # A function target with an in-place gradient, and a Gaussian given as a target, go
+        # through the chain's buffers (#52); before, CRHMC allocated 96 to 576 bytes a step
+        w = warmup(Xoshiro(1), Polytope(zeros(5), ones(5); A = ones(1, 5), b = [3.0]))
+        ℓ(x) = -sum(abs2, x) / 2
+        targets = (Target(w, ℓ; gradient = (g, x) -> (g .= .-x)), GaussianTarget(w, fill(0.5, 5), Matrix(0.1I(5)); whiten = false))
+        for t in targets
+            c = PolytopeSamplers.start_state(m, t, Xoshiro(1))
+            rng = Xoshiro(2)
+            for _ in 1:10
+                PolytopeSamplers.step!(rng, c)
+            end
+            @test (@allocated PolytopeSamplers.step!(rng, c)) == 0
+        end
+    end
+
+    @testset "x follows z on density chords" begin
+        # Slice evaluations move x along T u instead of recomputing it (#52); after many
+        # moves it still matches center + T z
+        w = warmup(Xoshiro(1), Polytope(zeros(4), [1.0, 2.0, 3.0, 4.0]; A = ones(1, 4), b = [5.0]))
+        t = Target(w, x -> -sum(abs2, x .- 1) / 2)
+        for m in (HitAndRun(), CoordinateHitAndRun())
+            c = PolytopeSamplers.start_state(m, t, Xoshiro(1))
+            rng = Xoshiro(3)
+            for _ in 1:250
+                PolytopeSamplers.advance!(rng, c)
+            end
+            @test c.x ≈ w.center .+ w.transform * c.z atol = 1.0e-10
+        end
+    end
+
+    @testset "whitened Gaussian targets" begin
+        # Correlation 0.99 on [-10, 10]²: CHRR had a minimum ESS of 64 and R̂ 1.09 from 4 chains
+        # of 2000 sweeps in the polytope's coordinates; whitened, as hops samples truncated
+        # Gaussians (#52), the Gaussian is round in the chain's coordinates
+        box = Polytope(fill(-10.0, 2), fill(10.0, 2))
+        Σ = [1.0 0.99; 0.99 1.0]
+        t = GaussianTarget(box, zeros(2), Σ)
+        d = diagnostics(sample(Xoshiro(1), t, CoordinateHitAndRun(), MCMCSerial(), 2000, 4; progress = false))
+        @test d.min_ess > 2000
+        @test d.max_rhat < 1.01
+        @test moments_match(d, zeros(2), ones(2))
+        # Directions where the Gaussian is wider than the polytope are not stretched
+        wide = GaussianTarget(Polytope(zeros(2), ones(2)), [0.5, 0.5], Matrix(100.0I(2)))
+        @test wide.warmup.transform ≈ warmup(Polytope(zeros(2), ones(2))).transform
     end
 
     @testset "truncated Gaussian on a box ($m)" for m in density_methods
