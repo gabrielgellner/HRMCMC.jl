@@ -260,8 +260,10 @@ end
 # Adapted from PolyRound, PolyRound/static_classes/constraint_removal_reduction.py (commit
 # 6d3aee7, MIT; Copyright (c) 2026 PolyRound contributors): `P` without its redundant
 # constraints, and the number removed. A bound or inequality is redundant when, with its
-# right-hand side raised by 1, the maximum of its left-hand side over the polytope stays
-# within the solver's tolerance of the original right-hand side. This also removes weakly
+# right-hand side `r` raised by `max(1, |r|)`, the maximum of its left-hand side over the
+# polytope stays within `THIN_TOL * max(1, |r|)` of `r`. PolyRound raises by 1, which the
+# tolerance hides for `|r| ≥ 1e8`, so a bound such as `x ≤ 1e8` that is the only upper
+# bound of `x` would be removed. This also removes weakly
 # redundant constraints, which are tight only on a lower-dimensional face, such as a bound
 # that the other constraints reach at a single vertex. Each redundant constraint leaves
 # the model before the next is tested, so of two identical rows one is kept. Unlike
@@ -275,15 +277,16 @@ function remove_redundant(P::Polytope, optimizer)
     A, b = unit_rows(P.A, P.b)
     keep = trues(length(b))
     removed = 0
+    raise(r) = max(1.0, abs(r))
     function redundant(f, rhs)
         @objective(model, MAX_SENSE, f)
         optimize!(model)
-        return is_solved_and_feasible(model) && value(f) <= rhs + THIN_TOL * max(1.0, abs(rhs))
+        return is_solved_and_feasible(model) && value(f) <= rhs + THIN_TOL * raise(rhs)
     end
     for i in eachindex(upper)
         lower[i] == upper[i] && continue
         if isfinite(upper[i])
-            set_upper_bound(x[i], upper[i] + 1)
+            set_upper_bound(x[i], upper[i] + raise(upper[i]))
             if redundant(x[i], upper[i])
                 delete_upper_bound(x[i])
                 upper[i] = Inf
@@ -293,7 +296,7 @@ function remove_redundant(P::Polytope, optimizer)
             end
         end
         if isfinite(lower[i])
-            set_lower_bound(x[i], lower[i] - 1)
+            set_lower_bound(x[i], lower[i] - raise(lower[i]))
             if redundant(-x[i], -lower[i])
                 delete_lower_bound(x[i])
                 lower[i] = -Inf
@@ -304,7 +307,7 @@ function remove_redundant(P::Polytope, optimizer)
         end
     end
     for i in eachindex(b)
-        set_normalized_rhs(rows[i], b[i] + 1)
+        set_normalized_rhs(rows[i], b[i] + raise(b[i]))
         if redundant(sum(A[i, j] * x[j] for j in axes(A, 2) if A[i, j] != 0; init = 0.0), b[i])
             delete(model, rows[i])
             keep[i] = false

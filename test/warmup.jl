@@ -121,6 +121,13 @@ include(joinpath(@__DIR__, "fixtures", "thin_foodweb.jl"))
         w = warmup(Polytope([0.0, 0.0], [Inf, 1.0]; A = [1.0 -1.0], b = [0.0]))
         @test w.removed == 1
         @test size(w.G, 1) == 3
+        # Raising x₃ ≤ 1e8 by 1 is within the tolerance at that scale, so pruning removed
+        # the only upper bound of x₃ and the polytope became unbounded
+        box = Polytope(zeros(3), [1.0e-8, 1.0, 1.0e8])
+        @test warmup(box; atol = 1.0e-9).removed == 0
+        Q, removed = PolytopeSamplers.remove_redundant(box, PolytopeSamplers.HiGHS.Optimizer)
+        @test removed == 0
+        @test Q.upper == box.upper
     end
 
     @testset "ranges" begin
