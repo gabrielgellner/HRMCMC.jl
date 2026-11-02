@@ -17,7 +17,7 @@ function chebyshev_center(G, h, optimizer)
     r = @variable(model, lower_bound = 0)
     @constraint(model, G * z .+ r .<= h)
     @objective(model, MAX_SENSE, r)
-    optimize!(model)
+    solve!(model)
     if !is_solved_and_feasible(model)
         status = termination_status(model)
         status == INFEASIBLE && throw(ArgumentError("the polytope is empty"))
@@ -25,8 +25,12 @@ function chebyshev_center(G, h, optimizer)
             throw(ArgumentError("the polytope is unbounded: it holds balls of any radius"))
         error("the Chebyshev center linear program stopped with status $status")
     end
-    # `r ≥ 0` holds to the solver's tolerance, which left radii of -1e-12 (#83)
-    return value.(z), max(value(r), 0.0)
+    c, radius = value.(z), value(r)
+    # volesti rejects a ball with NaN or Inf (hpolytope.h); `r ≥ 0` holds to the solver's
+    # tolerance, which left radii of -1e-12 (#83)
+    all(isfinite, c) && isfinite(radius) ||
+        error("the Chebyshev center linear program returned a point that is not finite")
+    return c, max(radius, 0.0)
 end
 
 # Adapted from volesti, include/preprocess/max_inscribed_ellipsoid.hpp (commit 064e18c,
@@ -41,8 +45,18 @@ end
     max_volume_ellipsoid(A, b, x0; reg, maxiter = 500, tol = 1e-6)
 
 The maximum-volume ellipsoid inscribed in `{x : A x ≤ b}` by Zhang's primal-dual
-interior-point method, started from the interior point `x0`. Returns `(E2, c, converged)`
-with the ellipsoid `{x : (x - c)' E2 (x - c) ≤ 1}`. `reg` regularizes the Newton systems.
+interior-point method, started from the interior point `x0`. Returns
+`(E2, c, converged, distortion, failed)` with the ellipsoid `{x : (x - c)' E2 (x - c) ≤ 1}`.
+`reg` regularizes the Newton systems.
+
+As in PolyRound (maximum_volume_ellipsoid.py, `solve_mve`), the slacks at `x0` are raised to
+at least `1e-7` and capped at `1e6` times the smallest, so that a start near a facet or
+slacks spanning many orders of magnitude do not make the scaled system singular;
+`distortion` is the largest raise to the floor. A cap only moves far facets closer, so the
+ellipsoid stays inscribed; it is inscribed in the polytope itself only when `distortion`
+is 0.
+`failed` is true when the ellipsoid's matrix could not be factored, which ends the
+iteration with `E2` unusable.
 """
 function max_volume_ellipsoid(A, b, x0; reg::Real, maxiter::Integer = 500, tol::Real = 1.0e-6)
     m, n = size(A)
@@ -51,19 +65,27 @@ function max_volume_ellipsoid(A, b, x0; reg::Real, maxiter::Integer = 500, tol::
     bnrm = norm(b)
     # Scale each row by its slack at x0, so that x0 is the origin and every slack is one
     s0 = b .- A * x0
-    all(>(0), s0) || throw(ArgumentError("x0 must be strictly inside the polytope"))
-    A = A ./ s0
+    all(isfinite, s0) || throw(ArgumentError("the slacks at x0 must be finite"))
+    s = clamp.(s0, MVE_MIN_SLACK, max(minimum(s0), MVE_MIN_SLACK) * MVE_MAX_SLACK_RATIO)
+    # Capping a slack moves a far facet closer, so the ellipsoid stays inscribed; raising
+    # one to the floor moves a facet out, so only that changes the answer
+    distortion = maximum(s .- s0; init = 0.0)
+    A = A ./ s
     x = zeros(n)
     y = ones(m)
     z = zeros(m)
     bmAx = ones(m)
     last_r1 = last_r2 = prev_obj = -Inf
     converged = false
+    failed = false
     E2 = zeros(n, n)
     for i in 1:maxiter
         E2 = A' * (y .* A)
         F = cholesky(Symmetric(E2); check = false)
-        issuccess(F) || break
+        if !issuccess(F)
+            failed = true
+            break
+        end
         objval = sum(log, diag(F.U)) # half the log-determinant of E2
         Q = A * (F \ Matrix(A'))
         h = sqrt.(max.(diag(Q), 0.0))
@@ -136,7 +158,31 @@ function max_volume_ellipsoid(A, b, x0; reg::Real, maxiter::Integer = 500, tol::
         z .+= astep .* dz
         bmAx .-= astep .* Adx
     end
-    return E2, x .+ x0, converged
+    return E2, x .+ x0, converged, distortion, failed
+end
+
+# The floor and largest ratio of the starting slacks of the ellipsoid solver, PolyRound's
+# `default_0_width` and `default_max_ratio_bmAx0` (default_settings.py)
+const MVE_MIN_SLACK = 1.0e-7
+const MVE_MAX_SLACK_RATIO = 1.0e6
+
+# Adapted from PolyRound, static_classes/rounding/nearest_symmetric_positive_definite.py
+# (commit 6d3aee7, MIT): the nearest symmetric positive definite matrix to `M` (Higham 1988),
+# shifted until its smallest eigenvalue is positive. Inverting a nearly singular ellipsoid
+# matrix leaves `inv(E2)` slightly indefinite; a fixed jitter instead floors every axis.
+function nearest_spd(M)
+    B = (M .+ M') ./ 2
+    F = svd(B)
+    H = F.V * Diagonal(F.S) * F.V'
+    S = Symmetric((B .+ H) ./ 2)
+    k = 0
+    while true
+        λ = eigvals(S)[1]
+        λ > 0 && return S
+        k += 1
+        S = Symmetric(S + (-λ * k^2 + eps(minimum(diag(S)))) * I)
+    end
+    return S
 end
 
 # Scale each row of `G z ≤ h` to unit norm
@@ -153,24 +199,37 @@ end
     round_polytope!(center, T, G, h; optimizer, maxiter = 20, max_ratio = 6)
 
 Round the polytope `x = center + T z, G z ≤ h` in place by repeated maximum-volume
-ellipsoids, starting from the Chebyshev center. Each round maps the ellipsoid to the unit
+ellipsoids. Each round starts from the Chebyshev center and maps the ellipsoid to the unit
 ball; rounding stops when the ellipsoid's squared axis ratio is at most `max_ratio` (the
-criterion of volesti) or after `maxiter` rounds. The regularization of the ellipsoid solver
-starts at `1e-3` and falls tenfold per round (as in PolyRound and volesti).
+criterion of volesti), its solver has converged and its starting slacks needed no raise
+(the criterion of PolyRound), or after `maxiter` rounds. The regularization starts at
+`1e-4` and falls tenfold per round. PolyRound also goes on until the regularization reaches
+`1e-8`; that took web50 of #33 from 31 s to 98 s without changing its roundness.
+
+Adapted from PolyRound, static_classes/rounding/maximum_volume_ellipsoid.py (commit 6d3aee7,
+MIT; Copyright (c) 2026 PolyRound contributors), `iterative_solve`: each round starts from
+a new Chebyshev center, the ellipsoid is repaired to the nearest positive definite matrix
+before it is factored, and the result is moved back inside when its center ends on the
+boundary. PolyRound also scales the columns of `G` by geometric means first; `warmup`
+scales the variables before the slice instead, which leaves the columns of `G` within a
+factor of 4 on the food webs of #33, and scaling them again made one round of web50 fail to
+converge in 500 iterations (60 s against 11 s).
 """
 function round_polytope!(center, T, G, h; optimizer, maxiter::Integer = 20, max_ratio::Real = 6)
     k = size(G, 2)
     k == 0 && return center, T, G, h
-    c, r = chebyshev_center(G, h, optimizer)
-    r > 0 || throw(ArgumentError("the polytope has no interior in its span"))
-    shift!(center, T, G, h, c)
     reg = 1.0e-3
     ratio = Inf # squared axis ratio of the last ellipsoid mapped to the ball
+    distortion = 0.0
     for round in 1:maxiter
-        E2, c, converged = max_volume_ellipsoid(G, h, zeros(k); reg)
+        c, r = chebyshev_center(G, h, optimizer)
+        r > 0 || throw(ArgumentError("the polytope has no interior in its span"))
+        shift!(center, T, G, h, c)
+        reg = max(reg / 10, 1.0e-10)
+        E2, c, converged, distortion, failed = max_volume_ellipsoid(G, h, zeros(k); reg)
         λ = eigvals(Symmetric(E2))
         # A singular E2 has no inverse to factor
-        F = λ[1] > 0 ? cholesky(Symmetric(inv(Symmetric(E2)) + 1.0e-8 * I); check = false) : nothing
+        F = !failed && λ[1] > 0 ? cholesky(nearest_spd(inv(Symmetric(E2))); check = false) : nothing
         if F === nothing || !issuccess(F)
             @warn "warmup: ellipsoid rounding stopped in round $round, as the ellipsoid could not be factored; " *
                 (round == 1 ? "the polytope is not rounded. " : "the last ellipsoid mapped to the ball had axis ratio $(sqrt(ratio)). ") *
@@ -183,8 +242,14 @@ function round_polytope!(center, T, G, h; optimizer, maxiter::Integer = 20, max_
         T .= T * L
         G .= G * L
         normalize_rows!(G, h)
-        reg = max(reg / 10, 1.0e-10)
-        (ratio <= max_ratio && converged) && break
+        (ratio <= max_ratio && converged && distortion <= 1.0e-12) && break
+    end
+    # PolyRound raises here; the map is still valid, but the last ellipsoid was not inscribed
+    distortion > 1.0e-12 && @warn "warmup: the last ellipsoid of rounding started on a facet (slack raised by $(distortion)), so the polytope may be less round than reported"
+    # The center of the last ellipsoid can end on a facet to rounding error
+    if minimum(h) <= 0
+        c, _ = chebyshev_center(G, h, optimizer)
+        shift!(center, T, G, h, c)
     end
     return center, T, G, h
 end
@@ -242,6 +307,7 @@ function round_by_samples!(
     # The last point of each chain, in the current coordinates
     ends = zeros(k, chains)
     previous = Inf
+    saved = nothing # the body before the last phase's map, and its ratio
     for phase in 1:maxiter
         c, r = chebyshev_center(G, h, optimizer)
         # As hopsy raises for a Chebyshev ball of radius 0 (misc.py, commit 54516d7, MIT)
@@ -265,7 +331,22 @@ function round_by_samples!(
         λ[end] > eps() * λ[1] ||
             throw(ArgumentError("the polytope has no width in some direction of its slice"))
         s = sqrt.(λ ./ λ[end])
+        # Adapted from volesti, include/preprocess/svd_rounding.hpp (commit 064e18c,
+        # LGPL-3.0): a phase whose samples are four times less round than the last stretched
+        # along noise, so its map is undone and the next phase draws twice the samples
+        if saved !== nothing && s[1] >= 4 * previous
+            center .= saved.center
+            T .= saved.T
+            G .= saved.G
+            h .= saved.h
+            ends .= saved.ends
+            previous = saved.previous
+            N *= 2
+            saved = nothing
+            continue
+        end
         (s[1] < 2 || (s[1] <= NOISE_RATIO && s[1] > 0.9 * previous)) && break
+        saved = (; center = copy(center), T = copy(T), G = copy(G), h = copy(h), ends = copy(ends), previous)
         previous = s[1]
         s[s .< 2] .= 1
         shift!(center, T, G, h, μ)

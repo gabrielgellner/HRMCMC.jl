@@ -5,8 +5,9 @@ The convex polytope of points `x` with `lower .<= x .<= upper`, `A * x .<= b` an
 `C * x .== d`. Bounds may be infinite as long as the constraints bound the polytope. A
 coordinate with `lower[i] == upper[i]` is fixed at that value.
 
-`A`, `b`, `C` and `d` default to no constraints. Constraints of the form `L * x .>= f` are
-`A = -L, b = -f`.
+`A`, `b`, `C` and `d` default to no constraints and must be finite. Constraints of the form
+`L * x .>= f` are `A = -L, b = -f`. Bounds of magnitude `1e20` or more are infinite, as for
+HiGHS.
 
 `isempty(P)` solves a linear program to check whether `P` has any points, and `x in P`
 checks a point (see [`isfeasible`](@ref)).
@@ -35,6 +36,17 @@ struct Polytope <: AbstractModel
         n = length(lower)
         length(upper) == n ||
             throw(DimensionMismatch("lower has length $n but upper has length $(length(upper))"))
+        # PolyRound rejects infinite or NaN constraints (api.py:119-123): an infinite `b`
+        # makes every slack infinite, so the rounding stops at once on a wrong ellipsoid
+        (any(isnan, lower) || any(isnan, upper)) && throw(ArgumentError("bounds must not be NaN"))
+        all(isfinite, A) && all(isfinite, b) && all(isfinite, C) && all(isfinite, d) ||
+            throw(ArgumentError("A, b, C and d must be finite; leave out a constraint instead of making it infinite"))
+        # Bounds beyond 1e20 in magnitude are infinite, as HiGHS treats them; a finite bound of
+        # 1e30 would otherwise be a row whose slack swamps the others in rounding
+        if any(x -> isfinite(x) && abs(x) >= INFINITE_BOUND, lower) || any(x -> isfinite(x) && abs(x) >= INFINITE_BOUND, upper)
+            lower = [abs(x) >= INFINITE_BOUND ? -Inf : x for x in lower]
+            upper = [abs(x) >= INFINITE_BOUND ? Inf : x for x in upper]
+        end
         all(lower .<= upper) || throw(ArgumentError("lower bounds must not exceed upper bounds"))
         size(A) == (length(b), n) ||
             throw(DimensionMismatch("A must be $(length(b))×$n to match b and the bounds, got $(size(A))"))
@@ -106,15 +118,33 @@ function constraint_violation(P::Polytope, x)
     return v
 end
 
+# Bounds at or beyond this magnitude are infinite, as for HiGHS
+const INFINITE_BOUND = 1.0e20
+
 # A silent JuMP model. For HiGHS, the primal and dual feasibility tolerances are tightened from
 # 1e-7 to 1e-9, as PolyRound does for Gurobi, so that solver error does not pass for a direction
-# in which the polytope has width above the `atol` of `warmup`.
+# in which the polytope has width above the `atol` of `warmup`, and each solve stops after
+# 600 s, PolyRound's limit (default_settings.py), instead of hanging the warmup.
 function lp(optimizer)
     model = Model(optimizer)
     set_silent(model)
     if solver_name(model) == "HiGHS"
         set_attribute(model, "primal_feasibility_tolerance", 1.0e-9)
         set_attribute(model, "dual_feasibility_tolerance", 1.0e-9)
+        isinf(get_attribute(model, "time_limit")) && set_attribute(model, "time_limit", 600.0)
+    end
+    return model
+end
+
+# Solve `model`. Presolve can stop with INFEASIBLE_OR_UNBOUNDED on a degenerate program
+# that is neither; hops solves again without presolve
+# (LinearProgramGurobiImpl.cpp:96-100, commit b62592e, MIT), as here for HiGHS.
+function solve!(model)
+    optimize!(model)
+    if termination_status(model) == INFEASIBLE_OR_UNBOUNDED && solver_name(model) == "HiGHS"
+        set_attribute(model, "presolve", "off")
+        optimize!(model)
+        set_attribute(model, "presolve", "choose")
     end
     return model
 end
@@ -149,7 +179,7 @@ Whether `P` has no points, decided by a linear program.
 """
 function Base.isempty(P::Polytope; optimizer = HiGHS.Optimizer)
     model, _ = lp_model(first(scaled_polytope(P)), optimizer)
-    optimize!(model)
+    solve!(model)
     is_solved_and_feasible(model) && return false
     # With no objective the problem cannot be unbounded, so either status means infeasible
     status = termination_status(model)

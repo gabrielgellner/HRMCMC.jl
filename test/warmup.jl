@@ -1,5 +1,5 @@
 using PolytopeSamplers: Polytope, Warmup, ranges, warmup
-using LinearAlgebra: Diagonal, I, norm, rank, svdvals
+using LinearAlgebra: Diagonal, I, isposdef, norm, rank, svdvals
 using PolytopeSamplers: PolytopeSamplers, BilliardWalk, sample, sample_until_converged
 using Random: Xoshiro
 using Test: @test_logs
@@ -186,7 +186,9 @@ include(joinpath(@__DIR__, "fixtures", "wide_range_foodweb.jl"))
         @test c ≈ [1, 0] atol = 1.0e-5
         # Semi-axes 2 and 1: E2 = diag(1/4, 1)
         @test E2 ≈ [0.25 0; 0 1] atol = 1.0e-4
-        @test_throws ArgumentError PolytopeSamplers.max_volume_ellipsoid(A, b, [5.0, 0.0]; reg = 1.0e-3)
+        # A start outside the box has its slacks clamped, as in PolyRound, and reports it
+        @test PolytopeSamplers.max_volume_ellipsoid(A, b, [5.0, 0.0]; reg = 1.0e-3)[4] > 0
+        @test PolytopeSamplers.max_volume_ellipsoid(A, b, [0.5, 0.1]; reg = 1.0e-3)[4] == 0
     end
 
     @testset "equalities restrict the directions" begin
@@ -285,6 +287,29 @@ include(joinpath(@__DIR__, "fixtures", "wide_range_foodweb.jl"))
         # Polytopes whose coefficients are near 1 are left as they are
         @test PolytopeSamplers.scaled_polytope(Polytope(zeros(3), ones(3); A = ones(1, 3), b = [1.0]))[2] == ones(3)
         @test PolytopeSamplers.scaled_polytope(Polytope(zeros(2), ones(2)))[2] == ones(2)
+    end
+
+    @testset "numerical safeguards from the reference samplers" begin
+        # Infinite or NaN constraints are rejected, as in PolyRound; bounds beyond 1e20 are
+        # infinite, as for HiGHS
+        @test_throws ArgumentError Polytope([0.0, NaN], [1.0, 1.0])
+        @test_throws ArgumentError Polytope(zeros(2), ones(2); A = [1.0 Inf], b = [1.0])
+        @test_throws ArgumentError Polytope(zeros(2), ones(2); A = [1.0 1.0], b = [Inf])
+        P = Polytope([-1.0e30, 0.0], [1.0e30, 1.0]; A = [1.0 0.0; -1.0 0.0], b = [1.0, 1.0])
+        @test P.lower[1] == -Inf && P.upper[1] == Inf
+        # Equality rows within 1e-6 of the span of the others are left out, and the rest must
+        # still hold, as PolytopeSamplerMatlab and polytopewalk remove dependent rows
+        C = [1.0 0.0 0.0; 1.0 0.0 0.0; 0.0 1.0 0.0; 1.0 1.0e-9 0.0]
+        Ck, dk = PolytopeSamplers.independent_rows(C, [0.5, 0.5, 0.2, 0.5]; atol = 1.0e-8)
+        @test size(Ck, 1) == 2
+        @test_throws ArgumentError PolytopeSamplers.independent_rows(C, [0.5, 0.6, 0.2, 0.5]; atol = 1.0e-8)
+        w = warmup(Polytope(zeros(3), ones(3); C = [1.0 1.0 1.0; 1.0 1.0 1.0; 2.0 2.0 2.0], d = [1.0, 1.0, 2.0]))
+        @test size(w.transform, 2) == 2
+        # The nearest positive definite matrix to an indefinite one, as PolyRound repairs
+        # an ellipsoid before factoring it
+        M = [1.0 0.0; 0.0 -1.0e-12]
+        @test isposdef(PolytopeSamplers.nearest_spd(M))
+        @test PolytopeSamplers.nearest_spd(M) ≈ [1.0 0.0; 0.0 0.0] atol = 1.0e-10
     end
 
     @testset "badly scaled food web polytopes" begin
