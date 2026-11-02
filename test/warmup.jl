@@ -3,7 +3,7 @@ using LinearAlgebra: Diagonal, I, norm, rank, svdvals
 using PolytopeSamplers: PolytopeSamplers, BilliardWalk, sample, sample_until_converged
 using Random: Xoshiro
 using Test: @test_logs
-using JuMP: get_attribute
+using JuMP: get_attribute, optimizer_with_attributes
 
 include(joinpath(@__DIR__, "fixtures", "thin_foodweb.jl"))
 
@@ -225,6 +225,34 @@ include(joinpath(@__DIR__, "fixtures", "thin_foodweb.jl"))
         w = warmup(Polytope([0.2, 0.7], [0.2, 0.7]))
         @test size(w.transform) == (2, 0)
         @test w.center == [0.2, 0.7]
+    end
+
+    @testset "bounds equal up to rounding" begin
+        # Bounds 1e-12 apart leave no room for a ball, and warmup used to fall back to the
+        # 2n coordinate programs (#72); they are fixed at their midpoint instead
+        P = Polytope([0.0, 0.3, 0.0], [1.0, 0.3 + 1.0e-12, 1.0])
+        w = warmup(P)
+        @test isempty(w.points)
+        @test PolytopeSamplers.fixed_coordinates(w) == [2]
+        @test w.center[2] ≈ 0.3 + 0.5e-12
+        X = sample(Xoshiro(1), w, BilliardWalk(), 200; progress = false)
+        @test all(x -> x in P, eachcol(X))
+        # Bounds farther apart than the solver's tolerance are fixed with a warning
+        @test_logs (:warn, r"fixed directions") warmup(Polytope([0.0, 0.0], [1.0, 1.0e-7]); atol = 1.0e-6)
+    end
+
+    @testset "solver failures are not reported as empty or unbounded" begin
+        # With no time to solve, a coordinate program stops with TIME_LIMIT, which ranges
+        # reported as "unbounded" before #72
+        opt = optimizer_with_attributes(PolytopeSamplers.HiGHS.Optimizer, "time_limit" => 0.0)
+        simplex = Polytope(zeros(3), ones(3); A = ones(1, 3), b = [1.0])
+        err = try
+            ranges(simplex; optimizer = opt)
+        catch e
+            e
+        end
+        @test err isa ErrorException
+        @test occursin("TIME_LIMIT", err.msg)
     end
 
     # Issue #31: with atol = 1e-6 the warmup fixed thin directions at a center 1.1e-6 below a
