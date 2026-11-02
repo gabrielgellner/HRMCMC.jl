@@ -46,6 +46,34 @@ slice they define.
 w = warmup(simplex)
 ```
 
+### Scaling
+
+Before its linear programs, `warmup` rescales the variables by geometric-mean scaling (the
+`gmscale` of Saunders, as PolytopeSamplerMatlab and dingo use), which brings the
+constraint coefficients of each variable near 1. Food web polytopes whose biomasses span
+`1e-3` to `1e3` have coefficients over six orders of magnitude; without scaling, HiGHS
+returned points that violated bounds and the maximum-volume ellipsoid could not be found.
+The scales are powers of 2, so the warmup maps back to the original variables exactly, and
+`atol` and every result are in their units. Polytopes with coefficients near 1 are left as
+they are. [`ranges`](@ref) and `isempty` scale the same way.
+
+The other numerical safeguards of the warmup also follow the reference samplers:
+
+- Every linear program's point is checked against the polytope, and a program that fails
+  is solved again on a new model (PolyRound); one that stops with
+  `INFEASIBLE_OR_UNBOUNDED` is solved again without presolve (hops). Only a solver's
+  verdict is reported as empty or unbounded; any other failure raises an error naming its
+  status.
+- Equality rows within `1e-6` of the span of the others are left out, after checking that
+  they still hold (PolytopeSamplerMatlab, polytopewalk).
+- Ellipsoid rounding starts each round from a new Chebyshev center, clamps the starting
+  slacks of its solver, repairs the ellipsoid to the nearest positive definite matrix and
+  moves the center back inside when it ends on a facet (PolyRound).
+- `:samples` rounding undoes a phase whose samples are four times less round than the last
+  and draws twice the samples (volesti).
+- The final center and transform must be finite and the transform of full rank (volesti,
+  PolyRound).
+
 ### Finding the slice: `extremes`
 
 With `extremes = false` (the default), `warmup` solves one linear program for the largest

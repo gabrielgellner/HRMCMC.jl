@@ -198,8 +198,16 @@ food web with 282 variables, pruning removes 502 of 796 constraints and the warm
 `prune = false` for such polytopes. `w.polytope` keeps every constraint, and `w.removed`
 counts those left out.
 
+`warmup` first rescales the variables by geometric-mean scaling, as PolytopeSamplerMatlab
+does, so that the constraint coefficients of each variable are near 1, and solves its linear
+programs and rounding in the scaled variables. Without it, polytopes whose coefficients span
+many orders of magnitude, such as food webs with biomasses from `1e-3` to `1e3`, gave the
+solver inaccurate points. The result is mapped back to `P`, and `atol` stays in the units of
+the variables.
+
 Throws an `ArgumentError` when `P` is empty or unbounded; with `extremes = false` one more
-linear program checks boundedness. `optimizer` is any JuMP optimizer for linear programs;
+linear program checks boundedness. A linear program that stops for another reason raises
+an error naming its status. `optimizer` is any JuMP optimizer for linear programs;
 each call builds its own model, so separate tasks may call `warmup` at the same time.
 """
 function warmup(
@@ -213,12 +221,16 @@ function warmup(
     n = nvars(P)
     F, gap = fix_close_bounds(P, atol)
     gap > THIN_TOL && thin_warning(gap, atol)
-    Q, removed = prune ? remove_redundant(F, optimizer) : (F, 0)
-    # Without room for a ball of radius `atol` the polytope has further equalities, which
-    # only the extreme points find
-    slice = extremes ? nothing : chebyshev_slice(Q, optimizer, atol)
+    # Everything below works in the scaled variables `x̄ = c .* x`, and widths and slacks are
+    # converted to units of `x` before they are compared with `atol`
+    S, c = scaled_polytope(F)
+    Q, removed = prune ? remove_redundant(S, optimizer) : (S, 0)
+    # Without room for a ball of radius `atol` the polytope may have further equalities, which
+    # only the extreme points find. A ball of radius `r` in `x̄` is at least `r / maximum(c)`
+    # wide in `x` in every direction.
+    slice = extremes ? nothing : chebyshev_slice(Q, optimizer, atol, atol * maximum(c))
     if slice === nothing
-        points, center, T = extreme_slice(Q, optimizer, atol)
+        points, center, T = extreme_slice(Q, optimizer, atol, c)
         G, h = reduced_constraints(Q, center, T)
     else
         center, T, G, h = slice
@@ -227,17 +239,33 @@ function warmup(
     if rounding === :ellipsoid
         round_polytope!(center, T, G, h; optimizer)
     elseif rounding === :samples
-        round_by_samples!(rng, P, center, T, G, h; optimizer)
+        round_by_samples!(rng, S, center, T, G, h; optimizer)
+    end
+    # volesti rejects an interior point with NaN or Inf (hpolytope.h), and PolyRound a map
+    # that collapses a direction (api.py:132-134); either would make every sample wrong
+    all(isfinite, center) && all(isfinite, T) && all(isfinite, G) && all(isfinite, h) ||
+        error("warmup: the center or transform is not finite; the constraints may be too badly scaled for the solver")
+    # Columns of very different lengths are legitimate, so the rank ignores their lengths
+    size(T, 2) > 0 && rank(T ./ norm.(eachcol(T))') < size(T, 2) &&
+        error("warmup: the transform lost a direction of the polytope")
+    # Chains start in the ball of radius `minimum(h)` around the center, so a center on a facet
+    # would start every chain there; PolyRound moves it back inside (maximum_volume_ellipsoid.py)
+    if size(T, 2) > 0 && minimum(h) <= 0
+        c0, _ = chebyshev_center(G, h, optimizer)
+        shift!(center, T, G, h, c0)
     end
     # Every sample keeps the center's values in the fixed directions, so a center outside the
     # polytope would put every sample outside; PolyRound and PolytopeSamplerMatlab also stop here
-    violation = constraint_violation(P, center)
+    violation = constraint_violation(S, center)
     if violation > THIN_TOL * max(1.0, norm(center, Inf))
         throw(ErrorException("warmup: the center violates a constraint of the polytope by $(violation); try a smaller atol or a different optimizer"))
     end
     zpoints = isempty(T) ? zeros(0, size(points, 2)) : T \ (points .- center)
     radius = isempty(T) ? 0.0 : last(chebyshev_center(G, h, optimizer))
-    return Warmup(P, points, center, T, G, h, zpoints, radius, rounding !== :none; removed, optimizer)
+    return Warmup(
+        P, points ./ c, center ./ c, T ./ c, G, h, zpoints, radius, rounding !== :none;
+        removed, optimizer,
+    )
 end
 
 warmup(P::Polytope; kwargs...) = warmup(default_rng(), P; kwargs...)
@@ -245,30 +273,67 @@ warmup(P::Polytope; kwargs...) = warmup(default_rng(), P; kwargs...)
 # The distinct extreme points of each coordinate, one per column, from `2n` linear programs.
 # A program that stops with a status other than optimal or unbounded is solved once more on
 # a new model, which starts without the previous basis, as PolyRound resets the basis and
-# solves again (PolyRound/static_classes/lp_interfacing.py, commit 6d3aee7, MIT).
+# solves again (PolyRound/static_classes/lp_interfacing.py, commit 6d3aee7, MIT). The
+# programs are solved on the scaled polytope and the points mapped back.
 function coordinate_extremes(P::Polytope, optimizer)
-    model, x = lp_model(P, optimizer)
-    optimize!(model)
-    check_feasible(model)
+    S, c = scaled_polytope(P)
+    return scaled_coordinate_extremes(S, optimizer) ./ c
+end
 
+function scaled_coordinate_extremes(P::Polytope, optimizer)
+    s = LPState(P, optimizer)
+    solve!(s.model)
+    check_feasible(s.model)
     n = nvars(P)
     points = Matrix{Float64}(undef, n, 2n)
     for i in 1:n, (k, sense) in enumerate((MIN_SENSE, MAX_SENSE))
-        @objective(model, sense, x[i])
-        optimize!(model)
-        if !is_solved_and_feasible(model) && !unbounded(model)
-            model, x = lp_model(P, optimizer)
-            @objective(model, sense, x[i])
-            optimize!(model)
-        end
-        if !is_solved_and_feasible(model)
-            unbounded(model) && throw(ArgumentError("the polytope is unbounded in coordinate $i"))
-            extreme = sense == MIN_SENSE ? "minimum" : "maximum"
-            error("the linear program for the $extreme of coordinate $i stopped with status $(termination_status(model))")
-        end
-        points[:, 2(i - 1) + k] = value.(x)
+        what = "the $(sense == MIN_SENSE ? "minimum" : "maximum") of coordinate $i"
+        points[:, 2(i - 1) + k] = checked_point(extreme_point!(s, P, optimizer, sense, x -> x[i]), what)
     end
     return unique(points; dims = 2)
+end
+
+# A JuMP model of a polytope and its variables, replaced by a new model when a program fails
+mutable struct LPState
+    model::Any
+    x::Any
+end
+
+LPState(P::Polytope, optimizer) = LPState(lp_model(P, optimizer)[1:2]...)
+
+# The point of `P` that optimizes `objective(x)`; `:unbounded`; or, when the solver fails
+# twice, a description of the last failure. A point that violates `P` by more than `LP_CHECK_TOL` counts as a failure, as
+# in PolyRound's `check_lps`, and a failure is solved once more on a new model, which starts
+# without the previous basis, as PolyRound resets the basis and solves again
+# (PolyRound/static_classes/lp_interfacing.py, commit 6d3aee7, MIT). hops likewise never uses
+# a solution whose status is not optimal (LinearProgramClpImpl.cpp, commit b62592e, MIT).
+function extreme_point!(s::LPState, P::Polytope, optimizer, sense, objective)
+    failure = ""
+    for attempt in 1:2
+        @objective(s.model, sense, objective(s.x))
+        solve!(s.model)
+        unbounded(s.model) && return :unbounded
+        if is_solved_and_feasible(s.model)
+            p = value.(s.x)
+            violation = constraint_violation(P, p)
+            violation <= LP_CHECK_TOL && return p
+            failure = "returned a point that violates the polytope by $violation"
+        else
+            failure = "stopped with status $(termination_status(s.model))"
+        end
+        if attempt == 1
+            fresh = LPState(P, optimizer)
+            s.model, s.x = fresh.model, fresh.x
+        end
+    end
+    return failure
+end
+
+# The point found by `extreme_point!`, or an error naming the program, `what`
+function checked_point(p, what)
+    p === :unbounded && throw(ArgumentError("the polytope is unbounded: $what has no bound"))
+    p isa String && error("the linear program for $what $p, also on a new model")
+    return p
 end
 
 function thin_warning(width, atol)
@@ -317,17 +382,25 @@ end
 # with equality, this solves one program per constraint; `warmup` finds the equalities.
 function remove_redundant(P::Polytope, optimizer)
     model, x, rows = lp_model(P, optimizer)
-    optimize!(model)
+    solve!(model)
     check_feasible(model)
     lower, upper = copy(P.lower), copy(P.upper)
     A, b = unit_rows(P.A, P.b)
     keep = trues(length(b))
     removed = 0
     raise(r) = max(1.0, abs(r))
+    # A program that is not solved keeps its constraint, as in hops
+    # (LinearProgramClpImpl.cpp, commit b62592e, MIT). A solution that violates `P` by more
+    # than 100 times the solver's feasibility tolerance is inaccurate and keeps it too, the
+    # check of PolyRound's `check_lps` (lp_interfacing.py, commit 6d3aee7, MIT): a removed
+    # constraint holds at every point of the relaxed program, so such a point shows the
+    # solve went wrong. Inaccurate optimal points removed binding bounds before #83.
     function redundant(f, rhs)
         @objective(model, MAX_SENSE, f)
-        optimize!(model)
-        return is_solved_and_feasible(model) && value(f) <= rhs + THIN_TOL * raise(rhs)
+        solve!(model)
+        is_solved_and_feasible(model) || return false
+        value(f) <= rhs + THIN_TOL * raise(rhs) || return false
+        return constraint_violation(P, value.(x)) <= LP_CHECK_TOL
     end
     for i in eachindex(upper)
         lower[i] == upper[i] && continue
@@ -379,19 +452,30 @@ end
 # slack, whose solution joins the points when the slack exceeds `atol`; and every direction
 # in which the points do not spread is measured by two programs. The equalities that hold
 # over a polytope are among its constraint rows, so the checked rows give its directions.
-function extreme_slice(P::Polytope, optimizer, atol)
-    points = coordinate_extremes(P, optimizer)
-    model, x = lp_model(P, optimizer)
-    points = [points slack_points(model, x, P, points, atol)]
+#
+# In `warmup`, `P` is scaled to `x̄ = c .* x` and every width and slack is converted to units
+# of `x` before it is compared with `atol`: a range of coordinate `i` divided by `cᵢ`, and a
+# width or slack along a unit vector `u` of `x̄` divided by `‖c .* u‖`, as `uᵀx̄ = (c .* u)ᵀx`.
+#
+# A width or slack also counts as zero when it is within the solver's accuracy in `x̄`,
+# `THIN_TOL`: where `cᵢ` is small, that accuracy is coarser than `atol` in `x`, and solver
+# noise would otherwise pass for width.
+function extreme_slice(P::Polytope, optimizer, atol, c = ones(nvars(P)))
+    points = scaled_coordinate_extremes(P, optimizer)
+    s = LPState(P, optimizer)
+    points = [points slack_points(s, P, optimizer, points, atol, c)]
     center = vec(mean(points; dims = 2))
-    Ceq, deq, width = active_equalities(P, points, center, atol)
+    Ceq, deq, width = active_equalities(P, points, center, atol, c)
+    Ceq, deq = independent_rows(Ceq, deq; atol)
     # Move the center onto `C * x .== d`, which the linear programs satisfy only to the
     # solver's tolerance; the other rows hold at the center already
     if !isempty(deq)
         center .-= pinv(Ceq) * (Ceq * center .- deq)
     end
-    T, D = direction_basis(Ceq, points, center, atol)
-    T, wide, dropped = keep_wide_directions(model, x, T, D, atol)
+    # A direction spread less than `atol * maximum(c)` in `x̄` may be thinner than `atol` in
+    # `x`, so it is measured by `keep_wide_directions`
+    T, D = direction_basis(Ceq, points, center, max(atol * maximum(c), THIN_TOL))
+    T, wide, dropped = keep_wide_directions(s, P, optimizer, T, D, atol, c)
     points = [points wide]
     width = max(width, dropped)
     width > THIN_TOL && thin_warning(width, atol)
@@ -400,18 +484,14 @@ end
 
 # The slice of `C * x .== d` and the fixed coordinates, centered on the largest ball inside
 # the polytope in that slice, from one linear program. Returns `nothing` when the ball has
-# radius below `atol`, as the polytope then has further equalities.
-function chebyshev_slice(P::Polytope, optimizer, atol)
+# radius below `ratol` (default `atol`), as the polytope may then have further equalities.
+function chebyshev_slice(P::Polytope, optimizer, atol, ratol = atol)
     n = nvars(P)
     fixed = findall(P.lower .== P.upper)
     E = Matrix{Float64}(I, n, n)
     C, d = unit_rows(P.C, P.d)
-    Ceq = [C; E[fixed, :]]
-    deq = [d; P.lower[fixed]]
+    Ceq, deq = independent_rows([C; E[fixed, :]], [d; P.lower[fixed]]; atol)
     x0 = isempty(deq) ? zeros(n) : pinv(Ceq) * deq
-    if !isempty(deq) && norm(Ceq * x0 .- deq) > atol * max(1, norm(deq))
-        throw(ArgumentError("the polytope is empty: its equalities have no solution"))
-    end
     T = isempty(deq) ? E : nullspace(Ceq)
     T[abs.(T) .< ZERO_TOL] .= 0
     G, h = reduced_constraints(P, x0, T; clamp = false)
@@ -420,7 +500,7 @@ function chebyshev_slice(P::Polytope, optimizer, atol)
         return x0, T, G, max.(h, 0.0)
     end
     c, r = chebyshev_center(G, h, optimizer)
-    r > atol || return nothing
+    r > ratol || return nothing
     isbounded(G, optimizer) || throw(ArgumentError("the polytope is unbounded"))
     return shift!(x0, T, G, h, c)
 end
@@ -428,7 +508,9 @@ end
 # Whether `{z : G z ≤ h}` (nonempty) is bounded: no direction `d ≠ 0` has `G d ≤ 0`. That
 # holds exactly when `G` has full column rank, ruling out `G d = 0`, and some `y > 0` has
 # `Gᵀ y = 0`, ruling out `G d ≤ 0` with `G d ≠ 0` (Stiemke's theorem of the alternative);
-# the second is a linear feasibility problem in `y ≥ 1`
+# the second is a linear feasibility problem in `y ≥ 1`. Only an infeasible program means
+# unbounded: a solver that stops for another reason raises an error, as the reference
+# samplers report failed programs, and before #83 a bounded polytope was called unbounded.
 function isbounded(G, optimizer)
     m, k = size(G)
     m == 0 && return k == 0
@@ -436,8 +518,11 @@ function isbounded(G, optimizer)
     model = lp(optimizer)
     y = @variable(model, [1:m], lower_bound = 1)
     @constraint(model, G' * y .== 0)
-    optimize!(model)
-    return is_solved_and_feasible(model)
+    solve!(model)
+    is_solved_and_feasible(model) && return true
+    status = termination_status(model)
+    status in (INFEASIBLE, INFEASIBLE_OR_UNBOUNDED) && return false
+    return error("the boundedness linear program stopped with status $status")
 end
 
 # The bounds and inequalities of `P` as `G z ≤ h` for `x = center + T z`, with unit-norm rows.
@@ -476,8 +561,9 @@ end
 # The equalities `C * x .== d` with the coordinates whose range is within `atol` and the
 # inequalities whose slack is within `atol` at every extreme point added as rows, held at their
 # values at `center`; and the largest such range or slack, which is the solver's tolerance for
-# equalities that hold over the polytope and more for directions that are only thin
-function active_equalities(P::Polytope, points, center, atol)
+# equalities that hold over the polytope and more for directions that are only thin. Ranges
+# and slacks are in units of `x = x̄ ./ c` (see `extreme_slice`).
+function active_equalities(P::Polytope, points, center, atol, c = ones(nvars(P)))
     n = nvars(P)
     C, d = unit_rows(P.C, P.d)
     rows = [C]
@@ -485,12 +571,12 @@ function active_equalities(P::Polytope, points, center, atol)
     width = 0.0
     for i in 1:n
         lo, hi = extrema(view(points, i, :))
-        if hi - lo <= atol && P.lower[i] != P.upper[i]
+        if isthin(hi - lo, c[i], atol) && P.lower[i] != P.upper[i]
             e = zeros(1, n)
             e[i] = 1
             push!(rows, e)
             push!(rhs, [center[i]])
-            width = max(width, hi - lo)
+            width = max(width, thin_width(hi - lo, c[i]))
         end
     end
     # slacks in units of x, so that atol is a distance whatever the scale of the row
@@ -498,10 +584,11 @@ function active_equalities(P::Polytope, points, center, atol)
     slack = b .- A * points
     for i in eachindex(b)
         largest = maximum(view(slack, i, :))
-        if largest <= atol
+        f = norm(c .* view(A, i, :))
+        if isthin(largest, f, atol)
             push!(rows, A[i:i, :])
             push!(rhs, [dot(view(A, i, :), center)])
-            width = max(width, largest)
+            width = max(width, thin_width(largest, f))
         end
     end
     fixed = findall(P.lower .== P.upper)
@@ -515,6 +602,10 @@ end
 # Ranges and slacks up to this are the solver's tolerance on a constraint that holds with
 # equality over the polytope; above it, and up to `atol`, the polytope is thin but not flat
 const THIN_TOL = 1.0e-8
+
+# The largest violation of the polytope accepted from a linear program's solution: 100 times
+# the feasibility tolerance of 1e-9 that `lp` sets for HiGHS, as PolyRound accepts 100 times
+const LP_CHECK_TOL = 1.0e-7
 
 # A constraint row whose norm on the slice is below this fraction of its norm in `x` is
 # constant on the slice
@@ -538,41 +629,43 @@ function direction_basis(Ceq, points, center, atol)
 end
 
 # For each inequality whose slack is within `atol` at every point, the point of the
-# polytope that maximizes its slack, when that slack exceeds `atol`
-function slack_points(model, x, P::Polytope, points, atol)
+# polytope that maximizes its slack, when that slack exceeds `atol`, with slacks in units of
+# `x = x̄ ./ c` (see `extreme_slice`). A program that fails raises an error: without its
+# point the inequality would pass for an equality.
+function slack_points(s::LPState, P::Polytope, optimizer, points, atol, c = ones(nvars(P)))
     A, b = unit_rows(P.A, P.b)
     found = Vector{Float64}[]
     for i in eachindex(b)
-        maximum(b[i] .- view(A, i, :)' * points) <= atol || continue
-        any(p -> b[i] - dot(view(A, i, :), p) > atol, found) && continue
-        @objective(model, MIN_SENSE, sum(A[i, j] * x[j] for j in axes(A, 2) if A[i, j] != 0; init = 0.0))
-        optimize!(model)
-        is_solved_and_feasible(model) || continue
-        p = value.(x)
-        b[i] - dot(view(A, i, :), p) > atol && push!(found, p)
+        f = norm(c .* view(A, i, :))
+        isthin(maximum(b[i] .- view(A, i, :)' * points), f, atol) || continue
+        any(p -> !isthin(b[i] - dot(view(A, i, :), p), f, atol), found) && continue
+        objective(x) = sum(A[i, j] * x[j] for j in axes(A, 2) if A[i, j] != 0; init = 0.0)
+        p = checked_point(extreme_point!(s, P, optimizer, MIN_SENSE, objective), "the slack of inequality $i")
+        isthin(b[i] - dot(view(A, i, :), p), f, atol) || push!(found, p)
     end
     return isempty(found) ? zeros(size(points, 1), 0) : reduce(hcat, found)
 end
 
 # The directions `D` in which the polytope has width above `atol`, by minimizing and
 # maximizing along each, added to the basis `T`; returns the basis, the points that reach
-# the widths, and the largest width of the directions left out
-function keep_wide_directions(model, x, T, D, atol)
+# the widths, and the largest width of the directions left out, in units of `x = x̄ ./ c`
+# (see `extreme_slice`)
+function keep_wide_directions(s::LPState, P::Polytope, optimizer, T, D, atol, c = ones(size(T, 1)))
     wide = Vector{Float64}[]
     kept = Vector{Float64}[]
     dropped = 0.0
-    for v in eachcol(D)
+    for (j, v) in enumerate(eachcol(D))
+        objective(x) = sum(v[i] * x[i] for i in eachindex(v) if v[i] != 0; init = 0.0)
         ends = map((MIN_SENSE, MAX_SENSE)) do sense
-            @objective(model, sense, sum(v[j] * x[j] for j in eachindex(v) if v[j] != 0; init = 0.0))
-            optimize!(model)
-            value.(x)
+            checked_point(extreme_point!(s, P, optimizer, sense, objective), "the width along direction $j")
         end
         w = dot(v, ends[2]) - dot(v, ends[1])
-        if w > atol
+        f = norm(c .* v)
+        if isthin(w, f, atol)
+            dropped = max(dropped, thin_width(w, f))
+        else
             push!(kept, v)
             append!(wide, ends)
-        else
-            dropped = max(dropped, w)
         end
     end
     isempty(kept) && return T, zeros(size(T, 1), 0), dropped
@@ -580,3 +673,36 @@ function keep_wide_directions(model, x, T, D, atol)
     V[abs.(V) .< ZERO_TOL] .= 0
     return [T V], reduce(hcat, wide), dropped
 end
+
+# Whether a width or slack `w` in the scaled variables, `w / f` in units of `x`, counts as
+# zero: it is within `atol` in `x`, or within the solver's accuracy `THIN_TOL` in `x̄`
+isthin(w, f, atol) = w <= max(atol * f, THIN_TOL)
+
+# The width in units of `x` that a fixed direction drops, for the warning; zero when the
+# direction is flat to the solver's accuracy
+thin_width(w, f) = w > THIN_TOL ? w / f : 0.0
+
+# Adapted from PolytopeSamplerMatlab, code/prepare/Polytope.m (commit f85505c, GPL-3.0),
+# removeDependentRows, and polytopewalk, src/utils/FacialReduction.cpp (commit 39c7183,
+# MIT; Copyright (c) 2023 Yuansi Chen, Benny Sun): the rows of `C x = d` that are not
+# within `RANK_TOL` of the span of the others, by a pivoted QR of `Cᵀ`. The default
+# tolerances of `pinv` and `nullspace`, near machine epsilon, keep nearly dependent rows,
+# and `pinv` then amplifies the solver's error in `d` by their inverse distance. Throws when
+# the rows left out do not hold at the solution of the others within `atol`.
+function independent_rows(C, d; atol)
+    isempty(d) && return C, d
+    F = qr(C', ColumnNorm())
+    r = abs.(diag(F.R))
+    keep = sort(F.p[1:count(>(RANK_TOL * max(1.0, r[1])), r)])
+    Ck, dk = C[keep, :], d[keep]
+    x = pinv(Ck) * dk
+    if norm(C * x .- d, Inf) > atol * max(1, norm(d, Inf))
+        throw(ArgumentError("the polytope is empty: its equalities have no solution"))
+    end
+    return Ck, dk
+end
+
+# Rows of unit norm closer than this to the span of the others are dependent: the
+# Cholesky threshold of PolytopeSamplerMatlab (1e-12 on squared diagonals) and the QR
+# threshold of polytopewalk (1e-5)
+const RANK_TOL = 1.0e-6
