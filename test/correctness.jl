@@ -17,8 +17,9 @@ using PolytopeSamplers: PolytopeSamplers, ACHR, BilliardWalk, CoordinateHitAndRu
     HitAndRun, VaidyaWalk,
     MCMCSerial,
     Polytope, diagnostics, sample, warmup
-using LinearAlgebra: I, svdvals
+using LinearAlgebra: I, cross, rank, svdvals
 using Random: Xoshiro
+using Statistics: mean
 
 const all_methods = (
     HitAndRun(), ACHR(), CoordinateHitAndRun(), CoordinateHitAndRun(scan = :random), BilliardWalk(),
@@ -96,6 +97,30 @@ skinny_cube(d) = Polytope([-100.0; fill(-1.0, d - 1)], [100.0; fill(1.0, d - 1)]
             @test all(x -> x in P, eachcol(X))
             @test X[:, end] != w.points[:, j]
         end
+    end
+
+    @testset "ACHR on a tetrahedron whose coordinate extremes collapse" begin
+        # Vertices (0,0,0), (1,1,1), (0.5,0.4,0.45), (0.45,0.5,0.4): every coordinate is
+        # extreme at the first two, so the coordinate extremes give ACHR few directions. Its
+        # means were biased: over 20 seeds the largest |z| of the three means was above 5 in
+        # 19, median 6.4, with R̂ near 1. With the random-objective points of the COBRA
+        # Toolbox and the missing directions added (#50), the median is 0.7 and the largest
+        # 2.75
+        V = [0.0 0.0 0.0; 1.0 1.0 1.0; 0.5 0.4 0.45; 0.45 0.5 0.4]
+        centroid = vec(mean(V; dims = 1))
+        rows = map(1:4) do i
+            F = V[setdiff(1:4, i), :]
+            normal = cross(F[2, :] - F[1, :], F[3, :] - F[1, :])
+            rhs = normal' * F[1, :]
+            normal' * centroid > rhs ? (-normal, -rhs) : (normal, rhs)
+        end
+        P = Polytope(zeros(3), ones(3); A = reduce(vcat, [r[1]' for r in rows]), b = [r[2] for r in rows])
+        w = warmup(Xoshiro(1), P)
+        Z = PolytopeSamplers.extreme_zpoints(w)
+        @test rank(Z .- mean(Z; dims = 2)) == 3
+        d = diagnostics(sample(Xoshiro(2), w, ACHR(), MCMCSerial(), 8000, 4; progress = false))
+        @test d.max_rhat < 1.01
+        @test all(@. abs(d.mean - centroid) < 5 * d.mcse_mean)
     end
 
     @testset "Chebyshev center" begin

@@ -52,7 +52,10 @@ approaches uniform as the mean settles; on rounded polytopes it is the slowest m
 It samples only the uniform distribution.
 
 A warmup built with `extremes = false` (the default) solves the `2n` linear programs for
-the extreme points when the first ACHR chain starts, and its chains share them.
+the extreme points when the first ACHR chain starts, and its chains share them. As in the
+COBRA Toolbox, the optima of random linear objectives are added until there are `2k`
+points for a slice of dimension `k`, so that the directions span the polytope when many
+coordinates reach their bounds at the same vertex.
 
 Kaufman, D. E. & Smith, R. L. (1998). Direction choice for accelerated convergence in
 hit-and-run sampling. Operations Research 46, 84–95. <https://doi.org/10.1287/opre.46.1.84>
@@ -213,6 +216,7 @@ end
 
 uniform(rng, tmin, tmax) = tmin + (tmax - tmin) * rand(rng)
 
+
 # A point on the chord `[tmin, tmax]` along `direction` (a vector, or a coordinate index)
 # from the current point: uniform without a density, otherwise by slice sampling from the
 # density along the chord
@@ -252,8 +256,8 @@ function chord_point!(zt, z, t, j::Integer)
 end
 
 # One step: move `c.z` along a new direction to a point on the chord, uniform or drawn
-# from the density, and update the running mean and `c.x`
-function step!(rng::AbstractRNG, c::HitAndRunState)
+# from the density, and update ACHR's running mean; `step!` also updates `c.x`
+function advance!(rng::AbstractRNG, c::HitAndRunState)
     w = c.warmup
     c.evaluations = 0
     c.exhausted = 0
@@ -271,11 +275,20 @@ function step!(rng::AbstractRNG, c::HitAndRunState)
     return finish_step!(c)
 end
 
+# A step, then `c.x = center + transform * c.z`. `x` costs `O(nk)` against the `O(mk)` of a
+# move, about a third of a hit-and-run step, so `AbstractMCMC.step` leaves it out of steps
+# that thinning or `discard_initial` throw away, as volesti and hops map the point only when
+# they store it.
+step!(rng::AbstractRNG, c) = update_x!(advance!(rng, c))
+
+# Samplers whose step needs `x` anyway (the barrier walks and CRHMC) advance by a full step
+advance!(rng::AbstractRNG, c) = step!(rng, c)
+
 # Adapted from hops, include/hops/MarkovChain/Proposal/CoordinateHitAndRunProposal.hpp
 # (commit b62592e, MIT; Copyright (c) 2020 Johann Fredrik Jadebeck, Axel Theorell, Samuel
 # Leweke, Katharina Nöh): the slacks are updated after each move instead of recomputed,
 # and the cyclic scan.
-function step!(rng::AbstractRNG, c::HitAndRunState{CoordinateHitAndRun})
+function advance!(rng::AbstractRNG, c::HitAndRunState{CoordinateHitAndRun})
     w = c.warmup
     c.evaluations = 0
     c.exhausted = 0
@@ -344,8 +357,10 @@ function update_x!(c)
     return c
 end
 
-function finish_step!(c::HitAndRunState)
-    update_x!(c)
+# ACHR's running mean of `z`, which only its directions use
+finish_step!(c::HitAndRunState) = c
+
+function finish_step!(c::HitAndRunState{ACHR})
     c.n_seen += 1
     for i in eachindex(c.center)
         c.center[i] += (c.z[i] - c.center[i]) / c.n_seen
@@ -451,7 +466,16 @@ copy_value(x) = x
 # Samplers may report problems found during their steps here, outside the hot loop
 check_state(c) = c
 
-function AbstractMCMC.step(rng::AbstractRNG, ::SamplingModel, ::PolytopeSampler, c; kwargs...)
+# A step whose point `sample` throws away (`discard_sample`, set for thinning and
+# `discard_initial`) skips `x` and the transition
+function AbstractMCMC.step(
+        rng::AbstractRNG, ::SamplingModel, ::PolytopeSampler, c; discard_sample::Bool = false, kwargs...,
+    )
+    if discard_sample
+        advance!(rng, c)
+        check_state(c)
+        return nothing, c
+    end
     step!(rng, c)
     check_state(c)
     return transition(c), c

@@ -204,10 +204,10 @@ end
 # distance to a facet, the trajectory reflects on the facet itself and its slack is set to
 # zero, which keeps the walk reversible; clamping slacks at zero in `first_hit` keeps
 # rounding error from moving it outside.
-function step!(rng::AbstractRNG, c::BilliardState)
+function advance!(rng::AbstractRNG, c::BilliardState)
     c.reflections = 0
     c.last_abandoned = false
-    isempty(c.z) && return update_x!(c)
+    isempty(c.z) && return c
     w = c.warmup
     randn!(rng, c.v)
     normalize!(c.v)
@@ -219,7 +219,7 @@ function step!(rng::AbstractRNG, c::BilliardState)
         λ, facet = first_hit(c.slack, c.Gv)
         if T <= λ
             move!(c, T)
-            return update_x!(c)
+            return c
         end
         move!(c, λ)
         T -= λ
@@ -231,5 +231,5 @@ function step!(rng::AbstractRNG, c::BilliardState)
     update_slack!(c)
     c.abandoned += 1
     c.last_abandoned = true
-    return update_x!(c)
+    return c
 end
