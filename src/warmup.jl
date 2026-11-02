@@ -164,7 +164,8 @@ of the extreme points, with the equalities held at their values there.
 
 `atol` is in the units of the variables. A polytope only `atol` wide in some direction is
 treated as flat in it: its samples are held at the center's value there, an error of at
-most `atol`. The default of `1e-8`, as in PolytopeSamplerMatlab, is ten times the
+most `atol`. A coordinate whose bounds are within `atol` of each other is fixed at their
+midpoint. The default of `1e-8`, as in PolytopeSamplerMatlab, is ten times the
 feasibility tolerance that `warmup` sets for HiGHS (`1e-9`), so only equalities that hold
 over the polytope are fixed; directions as thin as `1e-7` are sampled. With a larger `atol`,
 `warmup` warns when it fixes a direction wider than `1e-8`. The
@@ -209,7 +210,9 @@ function warmup(
     rounding in (:ellipsoid, :samples, :none) ||
         throw(ArgumentError("rounding must be :ellipsoid, :samples or :none, got :$rounding"))
     n = nvars(P)
-    Q, removed = prune ? remove_redundant(P, optimizer) : (P, 0)
+    F, gap = fix_close_bounds(P, atol)
+    gap > THIN_TOL && thin_warning(gap, atol)
+    Q, removed = prune ? remove_redundant(F, optimizer) : (F, 0)
     # Without room for a ball of radius `atol` the polytope has further equalities, which
     # only the extreme points find
     slice = extremes ? nothing : chebyshev_slice(Q, optimizer, atol)
@@ -238,23 +241,65 @@ end
 
 warmup(P::Polytope; kwargs...) = warmup(default_rng(), P; kwargs...)
 
-# The distinct extreme points of each coordinate, one per column, from `2n` linear programs
+# The distinct extreme points of each coordinate, one per column, from `2n` linear programs.
+# A program that stops with a status other than optimal or unbounded is solved once more on
+# a new model, which starts without the previous basis, as PolyRound resets the basis and
+# solves again (PolyRound/static_classes/lp_interfacing.py, commit 6d3aee7, MIT).
 function coordinate_extremes(P::Polytope, optimizer)
     model, x = lp_model(P, optimizer)
     optimize!(model)
-    is_solved_and_feasible(model) || throw(ArgumentError("the polytope is empty"))
+    check_feasible(model)
 
     n = nvars(P)
     points = Matrix{Float64}(undef, n, 2n)
     for i in 1:n, (k, sense) in enumerate((MIN_SENSE, MAX_SENSE))
         @objective(model, sense, x[i])
         optimize!(model)
+        if !is_solved_and_feasible(model) && !unbounded(model)
+            model, x = lp_model(P, optimizer)
+            @objective(model, sense, x[i])
+            optimize!(model)
+        end
         if !is_solved_and_feasible(model)
-            throw(ArgumentError("the polytope is unbounded in coordinate $i (status $(termination_status(model)))"))
+            unbounded(model) && throw(ArgumentError("the polytope is unbounded in coordinate $i"))
+            extreme = sense == MIN_SENSE ? "minimum" : "maximum"
+            error("the linear program for the $extreme of coordinate $i stopped with status $(termination_status(model))")
         end
         points[:, 2(i - 1) + k] = value.(x)
     end
     return unique(points; dims = 2)
+end
+
+function thin_warning(width, atol)
+    @warn "warmup: fixed directions in which the polytope has width up to $(width), below atol = $(atol); its samples do not vary in them. Pass a smaller atol, such as 1e-9, to sample them." maxlog = 1
+    return
+end
+
+# Whether a linear program stopped because its objective is unbounded
+unbounded(model) = termination_status(model) in (DUAL_INFEASIBLE, INFEASIBLE_OR_UNBOUNDED)
+
+# Throw unless a linear program over the polytope found a point: an `ArgumentError` when the
+# polytope is empty, an error naming the status when the solver stopped for another reason
+function check_feasible(model)
+    is_solved_and_feasible(model) && return model
+    status = termination_status(model)
+    status in (INFEASIBLE, INFEASIBLE_OR_UNBOUNDED) && throw(ArgumentError("the polytope is empty"))
+    return error("the feasibility linear program stopped with status $status")
+end
+
+# `P` with each pair of bounds closer than `atol` fixed at its midpoint, and the largest
+# such gap. A coordinate whose bounds differ by rounding error would otherwise leave the
+# polytope no room for a ball, and `warmup` would fall back to the `2n` programs.
+# PolytopeSamplerMatlab compares bounds with a relative tolerance (Polytope.m, dblcmp).
+function fix_close_bounds(P::Polytope, atol)
+    close = findall(@. 0 < P.upper - P.lower <= atol)
+    isempty(close) && return P, 0.0
+    lower, upper = copy(P.lower), copy(P.upper)
+    mid = (lower[close] .+ upper[close]) ./ 2
+    lower[close] .= mid
+    upper[close] .= mid
+    gap = maximum(P.upper[close] .- P.lower[close])
+    return Polytope(lower, upper, P.A, P.b, P.C, P.d), gap
 end
 
 # Adapted from PolyRound, PolyRound/static_classes/constraint_removal_reduction.py (commit
@@ -272,7 +317,7 @@ end
 function remove_redundant(P::Polytope, optimizer)
     model, x, rows = lp_model(P, optimizer)
     optimize!(model)
-    is_solved_and_feasible(model) || throw(ArgumentError("the polytope is empty"))
+    check_feasible(model)
     lower, upper = copy(P.lower), copy(P.upper)
     A, b = unit_rows(P.A, P.b)
     keep = trues(length(b))
@@ -348,9 +393,7 @@ function extreme_slice(P::Polytope, optimizer, atol)
     T, wide, dropped = keep_wide_directions(model, x, T, D, atol)
     points = [points wide]
     width = max(width, dropped)
-    if width > THIN_TOL
-        @warn "warmup: fixed directions in which the polytope has width up to $(width), below atol = $(atol); its samples do not vary in them. Pass a smaller atol, such as 1e-9, to sample them." maxlog = 1
-    end
+    width > THIN_TOL && thin_warning(width, atol)
     return points, center, T
 end
 
