@@ -166,6 +166,17 @@ include(joinpath(@__DIR__, "fixtures", "thin_foodweb.jl"))
         @test all(maximum(X; dims = 2) .<= upper .+ 1.0e-9)
     end
 
+    @testset "failed ellipsoid rounding warns" begin
+        # G has a zero column, so the ellipsoid's matrix is singular and cannot be factored;
+        # rounding stopped without a message before #73. (A random polytope 1e9 times
+        # narrower in one coordinate also fails, but only on some platforms.)
+        G = [1.0 0.0; -1.0 0.0]
+        h = [1.0, 1.0]
+        @test_logs (:warn, r"ellipsoid rounding stopped in round 1") PolytopeSamplers.round_polytope!(
+            zeros(2), [1.0 0.0; 0.0 1.0], G, h; optimizer = PolytopeSamplers.HiGHS.Optimizer,
+        )
+    end
+
     @testset "maximum-volume ellipsoid of a box" begin
         A = [1.0 0.0; -1.0 0.0; 0.0 1.0; 0.0 -1.0]
         b = [3.0, 1.0, 1.0, 1.0] # [-1, 3] × [-1, 1]
