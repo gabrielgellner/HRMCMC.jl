@@ -192,19 +192,25 @@ end
 # 2012-2024 Vissarion Fisikopoulos, 2018-2024 Apostolos Chalkis): the rounding phases of
 # multiphase Monte Carlo sampling, which scale the principal axes of billiard-walk samples
 # whose singular values are at least twice the smallest, with trajectories of mean length
-# 6√k r, and stop when the largest ratio is at most 3 or after 20 phases. Unlike volesti,
-# rounding also stops when a phase lowers the largest ratio by less than 10%: with N
-# correlated samples the ratios of a round body do not fall below a noise floor near
-# (1 + √(k/N_eff)) / (1 - √(k/N_eff)), which can exceed 3, and further phases would only
-# stretch noise.
+# 6√k r, and stop when the largest ratio is at most 3 or after 20 phases. Unlike volesti:
+#
+# - Rounding also stops when a phase lowers a ratio below NOISE_RATIO by less than 10%: with
+#   N correlated samples the ratios of a round body do not fall below a noise floor near
+#   (1 + √(k/N_eff)) / (1 - √(k/N_eff)), which can exceed 3, and further phases would only
+#   stretch noise. Above NOISE_RATIO a phase that improves little has underestimated the
+#   long axes, as on a skinny box, and rounding goes on: on [0, 1e6] × [0, 1]⁹ the 10% rule
+#   stopped 15 of 20 seeds at ratios up to 13108 (#45).
+# - Phases draw a quarter of the samples while the last ratio exceeds NOISE_RATIO, as they
+#   only need the long axes (#37).
 """
     round_by_samples!(rng, P, center, T, G, h; optimizer, samples = max(20k, 1000),
                       maxiter = 20, max_ratio = 3)
 
 Round the polytope `x = center + T z, G z ≤ h` in place from samples: each phase draws
-`samples` points by the billiard walk from the Chebyshev center, takes the singular value
-decomposition of the centered samples, and stretches the coordinates so that every
-principal axis with at least twice the length of the shortest gets that length.
+`samples` points by the billiard walk from the Chebyshev center (a quarter as many while
+the polytope is far from round), takes the singular value decomposition of the centered
+samples, and stretches the coordinates so that every principal axis with at least twice the
+length of the shortest gets that length.
 """
 function round_by_samples!(
         rng::AbstractRNG, P, center, T, G, h; optimizer, samples::Union{Nothing, Integer} = nothing,
@@ -213,17 +219,18 @@ function round_by_samples!(
     k = size(G, 2)
     k == 0 && return center, T, G, h
     N = something(samples, max(20k, 1000))
-    Z = Matrix{Float64}(undef, k, N)
     previous = Inf
     for _ in 1:maxiter
         c, r = chebyshev_center(G, h, optimizer)
         shift!(center, T, G, h, c)
         w = Warmup(P, zeros(length(center), 0), center, T, G, h, zeros(k, 0), r, false; optimizer)
         state = chain_state(BilliardWalk(trajectory_length = 6 * sqrt(k) * r), w)
+        n = previous > NOISE_RATIO ? max(N ÷ 4, min(N, 2k)) : N
+        Z = Matrix{Float64}(undef, k, n)
         for _ in 1:k
             step!(rng, state)
         end
-        for j in 1:N
+        for j in 1:n
             step!(rng, state)
             Z[:, j] = state.z
         end
@@ -231,7 +238,7 @@ function round_by_samples!(
         F = svd(Z .- μ)
         F.S[end] > 0 || throw(ArgumentError("the polytope has no width in some direction of its slice"))
         s = F.S ./ F.S[end]
-        (s[1] < 2 || s[1] > 0.9 * previous) && break
+        (s[1] < 2 || (s[1] <= NOISE_RATIO && s[1] > 0.9 * previous)) && break
         previous = s[1]
         s[s .< 2] .= 1
         shift!(center, T, G, h, μ)
@@ -243,3 +250,7 @@ function round_by_samples!(
     end
     return center, T, G, h
 end
+
+# Ratios of singular values up to this are within a few times the noise floor of
+# `round_by_samples!` (about 3 on food webs with 250 to 1000 directions)
+const NOISE_RATIO = 10.0

@@ -1,5 +1,5 @@
 using PolytopeSamplers: Polytope, Warmup, warmup
-using LinearAlgebra: I, norm, rank, svdvals
+using LinearAlgebra: Diagonal, I, norm, rank, svdvals
 using PolytopeSamplers: PolytopeSamplers, BilliardWalk, sample, sample_until_converged
 using Random: Xoshiro
 using Test: @test_logs
@@ -59,6 +59,15 @@ include(joinpath(@__DIR__, "fixtures", "thin_foodweb.jl"))
         @test all(x -> x in P, eachcol(w.transform * w.zpoints .+ w.center))
         _, r = PolytopeSamplers.chebyshev_center(w.G, w.h, PolytopeSamplers.HiGHS.Optimizer)
         @test 0.9 < r < 1.1
+        # :samples rounding of a skinny box reaches a ratio near 3. The rule that stops after a
+        # phase improving by less than 10% stopped 15 of 20 seeds at ratios up to 13108 (#45);
+        # over 50 seeds the largest ratio is now 1.7
+        widths = [1.0e6; ones(9)]
+        for seed in 1:3
+            w = warmup(Xoshiro(seed), Polytope(zeros(10), widths); rounding = :samples)
+            sv = svdvals(w.transform \ Diagonal(widths))
+            @test sv[1] / sv[end] < 4
+        end
     end
 
     @testset "maximum-volume ellipsoid of a box" begin
