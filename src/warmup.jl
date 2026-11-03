@@ -26,7 +26,8 @@ direction in which the polytope has width and the rows of `G` have unit norm.
   when not rounded.
 - `G`, `h`: the constraints of `P` in `z`, leaving out those that are constant on the slice.
 - `zpoints`: `points` in `z` coordinates.
-- `radius`: the radius of the largest ball in `{z : G z ≤ h}`, near 1 when rounded.
+- `radius`: the radius of the largest ball in `{z : G z ≤ h}`; after `:ellipsoid` or
+  `:barrier` rounding, the radius `minimum(h)` of the largest ball around `z = 0`, near 1.
 - `rounded`: whether `transform` rounds the polytope.
 - `removed`: the number of redundant bounds and inequalities left out of `G` and `h`.
 - `bounded`: `false` for the warmup of a [`GaussianTarget`](@ref) on an unbounded
@@ -330,7 +331,13 @@ function warmup(
         throw(ErrorException("warmup: the center violates a constraint of the polytope by $(violation); try a smaller atol or a different optimizer"))
     end
     zpoints = isempty(T) ? zeros(0, size(points, 2)) : T \ (points .- center)
-    radius = isempty(T) ? 0.0 : last(chebyshev_center(G, h, optimizer))
+    # Ellipsoid rounding maps its last ellipsoid, which lies in the polytope, to the unit ball
+    # around `z = 0`, so the ball of radius `minimum(h)` around the center is near the largest.
+    # A Chebyshev program on the dense rounded `G` took 45 s of a 160 s warmup on a
+    # 3060-dimensional food web, for a radius of 1.0012 against 1.000 (#119).
+    radius = isempty(T) ? 0.0 :
+        rounding in (:ellipsoid, :barrier) ? max(minimum(h), 0.0) :
+        last(chebyshev_center(G, h, optimizer))
     rounding === :none || wide_warning(T ./ c, radius)
     return Warmup(
         P, points ./ c, center ./ c, T ./ c, G, h, zpoints, radius, rounding !== :none;
