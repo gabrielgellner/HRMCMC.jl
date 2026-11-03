@@ -193,11 +193,13 @@ const MVE_MAX_SLACK_RATIO = 1.0e6
 # (commit 6d3aee7, MIT): the nearest symmetric positive definite matrix to `M` (Higham 1988),
 # shifted until its smallest eigenvalue is positive. Inverting a nearly singular ellipsoid
 # matrix leaves `inv(E2)` slightly indefinite; a fixed jitter instead floors every axis.
+# PolyRound takes the polar factor `H` of the symmetric part `B` from its SVD; for symmetric
+# `B = Q Λ Qᵀ` it is `Q |Λ| Qᵀ`, so `(B + H) / 2 = Q max(Λ, 0) Qᵀ` comes from the symmetric
+# eigensolver. The SVD (`gesdd`) failed to converge with multithreaded BLAS on a
+# 50-species food web (#115).
 function nearest_spd(M)
-    B = (M .+ M') ./ 2
-    F = svd(B)
-    H = F.V * Diagonal(F.S) * F.V'
-    S = Symmetric((B .+ H) ./ 2)
+    λ, Q = eigen(Symmetric((M .+ M') ./ 2))
+    S = Symmetric(Q * Diagonal(max.(λ, 0)) * Q')
     k = 0
     while true
         λ = eigvals(S)[1]
