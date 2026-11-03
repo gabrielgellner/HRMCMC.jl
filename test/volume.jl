@@ -41,6 +41,30 @@ cross_polytope(n) = Polytope(
         @test abs(v.log_volume) < 4 * v.log_stderr
     end
 
+    @testset "phases (#54)" begin
+        w = warmup(Polytope(zeros(30), ones(30)))
+        r_in = minimum(w.h)
+        rng = Xoshiro(1)
+        ρ_last = PolytopeSamplers.last_ball_radius(rng, w, r_in)
+        radii, pilots = PolytopeSamplers.ball_schedule(rng, w, r_in, ρ_last, 4)
+        # The pilot chains of each body before the last ball, which body_ratio continues
+        @test length(pilots) == length(radii) - 1
+        @test all(i -> all(c -> c.radius2 == radii[i]^2 && c.sweeps > 100, pilots[i]), eachindex(pilots))
+        # A sweep counts its coordinate moves that end inside the next ball
+        c = pilots[end][1]
+        @test PolytopeSamplers.sweep!(c, Inf) == 30
+        @test PolytopeSamplers.sweep!(c, -Inf) == 0
+        @test 0 <= PolytopeSamplers.sweep!(c, radii[end]^2) <= 30
+        # Batched membership tests count the same points as one at a time, drawn as columns
+        # of batches of 256
+        hits = PolytopeSamplers.ball_hits(Xoshiro(2), w, ρ_last, 600)
+        rng = Xoshiro(2)
+        Z = zeros(30, 256)
+        @test hits == sum((256, 256, 88)) do b
+            count(z -> all(w.G * PolytopeSamplers.ball_point!(rng, z, ρ_last) .<= w.h), eachcol(view(Z, :, 1:b)))
+        end
+    end
+
     @testset "ball chord keeps the current point" begin
         # With |z|² rounded above ρ², the ball's chord along z₁ is the point t = -z₁, which
         # lies outside the polytope's chord [-0.3, 0.5] when z₁ = 0.4 (#43)
