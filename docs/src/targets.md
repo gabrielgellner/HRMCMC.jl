@@ -62,6 +62,28 @@ the chord dominates its step. Both targets are LogDensityProblems objects with g
 Robert, C. P. (1995). Simulation of truncated normal variables. Statistics and Computing 5,
 121–125. <https://doi.org/10.1007/BF00143942>
 
+## Gaussians on unbounded polyhedra
+
+A Gaussian restricted to an unbounded polyhedron is still a proper distribution, and
+[`GaussianTarget`](@ref) samples it with [`HitAndRun`](@ref) and
+[`CoordinateHitAndRun`](@ref), whose chords may then be infinite. Here the half-plane
+`x₁ ≥ 1` truncates a standard normal; the mean of `x₁` is `φ(1) / (1 - Φ(1)) ≈ 1.525`:
+
+```@example targets
+halfplane = Polytope([1.0, -Inf], [Inf, Inf])
+t = GaussianTarget(halfplane, [0.0, 0.0], [1.0 0.0; 0.0 1.0])
+r = sample_until_converged(Xoshiro(4), t, CoordinateHitAndRun())
+r.diagnostics.mean, r.diagnostics.mcse_mean
+```
+
+The warmup is prepared on the polyhedron cut by a box of ±3 standard deviations around the
+Gaussian's mode, which gives a center and a rounding at the scale of the Gaussian, and the
+box is then dropped. The other samplers, [`volume`](@ref), [`ranges`](@ref) and other
+targets need a bounded polytope and throw an `ArgumentError`. Over 50 seeds, on the
+half-plane and on the orthant of a 3-variable Gaussian with one fixed coordinate, both
+samplers matched the exact means and standard deviations within five and six Monte Carlo
+standard errors.
+
 ## Which samplers support densities
 
 - [`HitAndRun`](@ref) and [`CoordinateHitAndRun`](@ref) draw each point on a chord from the

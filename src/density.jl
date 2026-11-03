@@ -45,6 +45,8 @@ function Target(w::Warmup, ℓ; gradient = nothing)
         throw(ArgumentError("ℓ must be a function or implement the LogDensityProblems interface"))
     LogDensityProblems.dimension(ℓ) == n ||
         throw(DimensionMismatch("ℓ has dimension $(LogDensityProblems.dimension(ℓ)), the polytope has $n variables"))
+    w.bounded || ℓ isa QuadraticLogDensity && isposdef(Symmetric(w.transform' * ℓ.Q * w.transform)) ||
+        throw(ArgumentError("on an unbounded polyhedron only a GaussianTarget has a proper density"))
     return Target{typeof(ℓ)}(w, ℓ)
 end
 
@@ -99,6 +101,13 @@ Gaussian does it is slower: on a food web with 282 variables and `σ` a fifth of
 coordinate's range, the minimum ESS from 4 chains of 20 000 sweeps was 729 whitened against
 1019 without, so it is off by default.
 
+The Gaussian is a proper distribution on an unbounded polyhedron too. When `P` is
+unbounded, the warmup is prepared on `P` cut by a box of ±3 standard deviations around the
+Gaussian's mode on `P`, found by a quadratic program, and the box is then dropped, so the
+target is not truncated. Only [`HitAndRun`](@ref) and [`CoordinateHitAndRun`](@ref) sample
+it, drawing the truncated normal on chords that may be infinite, as hops does; `whiten`
+does not apply.
+
 # Examples
 ```julia
 box = Polytope(fill(-1.0, 2), fill(1.0, 2))
@@ -117,9 +126,58 @@ function GaussianTarget(w::Warmup, μ::AbstractVector{<:Real}, Σ::AbstractMatri
     return Target(w, QuadraticLogDensity(Qx, Vector{Float64}(μ), zeros(n)))
 end
 
-function GaussianTarget(P::Polytope, μ, Σ; whiten::Bool = false, kwargs...)
-    return GaussianTarget(warmup(P; kwargs...), μ, Σ; whiten)
+function GaussianTarget(P::Polytope, μ, Σ; whiten::Bool = false, optimizer = HiGHS.Optimizer, kwargs...)
+    polytope_isbounded(P, optimizer) && return GaussianTarget(warmup(P; optimizer, kwargs...), μ, Σ; whiten)
+    whiten && throw(ArgumentError("whiten applies to bounded polytopes; on an unbounded polyhedron the warmup is already rounded at the scale of the Gaussian"))
+    length(μ) == nvars(P) || throw(DimensionMismatch("μ has length $(length(μ)), the polytope has $(nvars(P)) variables"))
+    F = cholesky(Symmetric(Matrix{Float64}(Σ)); check = false)
+    issuccess(F) || throw(ArgumentError("Σ must be positive definite"))
+    return GaussianTarget(gaussian_warmup(P, Vector{Float64}(μ), Matrix(inv(F)), sqrt.(diag(Σ)), optimizer; kwargs...), μ, Σ)
 end
+
+# Whether `P` (nonempty) is bounded: the bounds and inequalities on the slice of its explicit
+# equalities and fixed coordinates have no recession direction (see `isbounded`)
+function polytope_isbounded(P::Polytope, optimizer)
+    n = nvars(P)
+    fixed = findall(P.lower .== P.upper)
+    E = Matrix{Float64}(I, n, n)
+    C, d = unit_rows(P.C, P.d)
+    Ceq, deq = independent_rows([C; E[fixed, :]], [d; P.lower[fixed]]; atol = 1.0e-8)
+    T = isempty(deq) ? E : nullspace(Ceq)
+    size(T, 2) == 0 && return true
+    x0 = isempty(deq) ? zeros(n) : pinv(Ceq) * deq
+    G, _ = reduced_constraints(P, x0, T; clamp = false)
+    return isbounded(G, optimizer)
+end
+
+# hops samples truncated Gaussians on unbounded polyhedra with infinite chord ends
+# (TruncatedGaussianProposal.hpp, commit b62592e, MIT). The warmup needs a center and a
+# rounding, which the Chebyshev ball and the inscribed ellipsoid of an unbounded polyhedron
+# do not give. Here they come from `warmup` on `P` cut by the box of ±GAUSSIAN_BOX standard
+# deviations around the Gaussian's mode on `P` (a quadratic program), which holds most of the
+# target's mass; the box is then dropped, so `G` and `h` are the rows of `P` and the target is
+# not truncated. Pruning is off, as a row redundant in the box need not be redundant in `P`.
+function gaussian_warmup(P::Polytope, μ, Q, σ, optimizer; kwargs...)
+    model, x, _ = lp_model(P, optimizer)
+    r = x .- μ
+    @objective(model, MIN_SENSE, r' * Q * r)
+    solve!(model)
+    check_feasible(model)
+    mode = value.(x)
+    box = Polytope(
+        max.(P.lower, mode .- GAUSSIAN_BOX .* σ), min.(P.upper, mode .+ GAUSSIAN_BOX .* σ),
+        P.A, P.b, P.C, P.d,
+    )
+    wb = warmup(box; kwargs..., optimizer, prune = false)
+    G, h = reduced_constraints(P, wb.center, wb.transform)
+    k = size(wb.transform, 2)
+    return Warmup(
+        P, zeros(nvars(P), 0), wb.center, wb.transform, G, h, zeros(k, 0), wb.radius,
+        wb.rounded; optimizer, bounded = false,
+    )
+end
+
+const GAUSSIAN_BOX = 3.0
 
 # Adapted from hops, src/hops/MarkovChain/Proposal/TruncatedGaussianProposal.hpp (commit
 # b62592e, MIT; Copyright (c) 2020 Johann Fredrik Jadebeck, Axel Theorell, Samuel Leweke,
