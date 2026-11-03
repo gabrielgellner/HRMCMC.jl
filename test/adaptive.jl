@@ -129,6 +129,7 @@ end
     @testset "argument checks" begin
         @test_throws ArgumentError sample_until_converged(w; nchains = 1)
         @test_throws ArgumentError sample_until_converged(w; n = 2)
+        @test_throws ArgumentError sample_until_converged(w; n = 9)
         @test_throws ArgumentError sample_until_converged(w; n = 100, max_n = 50)
         @test_throws ArgumentError sample_until_converged(w; thinning = 0)
     end

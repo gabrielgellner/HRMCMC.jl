@@ -84,6 +84,7 @@ cross_polytope(n) = Polytope(
         @test volume(Xoshiro(2), P).log_volume == volume(Xoshiro(2), P).log_volume
         @test_throws ArgumentError volume(P; error = 0)
         @test_throws ArgumentError volume(P; nchains = 1)
+        @test_throws ArgumentError volume(P; n = 9)
         @test_throws ArgumentError volume(Polytope(zeros(2), fill(Inf, 2)))
     end
 end

@@ -18,7 +18,10 @@ Returns a named tuple:
 - `multivariate_rhat`: with `multivariate = true`, the multivariate R̂ of Brooks & Gelman
   (1998) of the split chains, the largest R̂ of any linear combination of the coordinates;
   `NaN` otherwise. It flags chains that disagree along a direction such as `x₁ - x₂` while
-  every coordinate agrees. It costs a covariance matrix of the coordinates.
+  every coordinate agrees. It costs a covariance matrix of the coordinates. It grows with the
+  number of coordinates `p` even for independent draws: with an ESS near 3500 it was 1.007
+  for 10 coordinates, 1.03 for 50 and 1.10 for 200, so a cutoff of 1.01 suits a few
+  coordinates or a large ESS.
 
 `kind` sets the ESS: `:bulk` measures the center of each marginal and `:tail` its 5% and
 95% quantiles (Vehtari et al. 2021). A common rule is to run until `max_rhat < 1.01` and
@@ -39,7 +42,9 @@ function diagnostics(
     isempty(chains) && throw(ArgumentError("no chains given"))
     allequal(size, chains) || throw(DimensionMismatch("chains must all have the same size"))
     nvars, ndraws = size(first(chains))
-    ndraws >= 4 || throw(ArgumentError("chains need at least 4 points, got $ndraws"))
+    # MCMCDiagnosticTools gives NaN for split chains of 4 points or fewer, which would read
+    # as constant coordinates
+    ndraws >= 10 || throw(ArgumentError("chains need at least 10 points, got $ndraws"))
     ess, rhat, means, stds, mcse_mean, mcse_std = (Vector{Float64}(undef, nvars) for _ in 1:6)
     # MCMCDiagnosticTools takes draws × chains × parameters; a block of coordinates at a
     # time keeps the copy small

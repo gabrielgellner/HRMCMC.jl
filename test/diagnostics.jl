@@ -74,6 +74,10 @@ using Statistics: mean
         end
         @test 1 <= diagnostics(slice; multivariate = true).multivariate_rhat < 1.01
         @test 1 <= diagnostics([rand(Xoshiro(seed), 3, 1000) for seed in 1:4]; multivariate = true).multivariate_rhat < 1.01
+        # It grows with the number of coordinates for independent draws, as the docstring
+        # says: from 1.075 to 1.106 over 50 seeds in 200 dimensions
+        chains = [randn(Xoshiro(seed), 200, 1000) for seed in 1:4]
+        @test 1.05 < diagnostics(chains; multivariate = true).multivariate_rhat < 1.15
     end
 
     @testset "coordinates in blocks" begin
@@ -91,5 +95,9 @@ using Statistics: mean
         @test_throws ArgumentError diagnostics(Matrix{Float64}[])
         @test_throws DimensionMismatch diagnostics([rand(2, 10), rand(2, 11)])
         @test_throws ArgumentError diagnostics(rand(2, 3))
+        # MCMCDiagnosticTools gives NaN below 10 points, which would read as constant
+        # coordinates
+        @test_throws ArgumentError diagnostics(rand(2, 9))
+        @test all(isfinite, diagnostics(rand(Xoshiro(1), 2, 10)).ess)
     end
 end
