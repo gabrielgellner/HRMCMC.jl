@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-11-03
+
+### Documentation
+
+- **warmup**: Record how the preprocessing compares with the references after the audit (#85)
+- **rounding**: Report the cost and mixing of barrier rounding on food webs (#48)
+- **crhmc**: Record the measured effect of the PolytopeSamplerMatlab safeguards (#51)
+
+### Features
+
+- **rounding**: Add rounding by the Dikin ellipsoid at the analytic center, rounding = :barrier (#48)
+- **density**: Sample Gaussian targets on unbounded polyhedra with hit-and-run (#93)
+
+### Performance
+
+- **barrier**: Compute the forward term of the Metropolis ratio from the Gaussian draw, without a triangular multiply (#55)
+
 ## [0.5.0] - 2026-11-03
 
 Results of `sample_until_converged` and `volume` differ from 0.4.0 for the same seed. `sample_until_converged` returns a new field `thinning`, and slowly mixing runs keep every `thinning`-th step. `volume` defaults to `n = 500`. `n` below 10 now throws an `ArgumentError`.
@@ -156,7 +173,3 @@ Results of `sample_until_converged` and `volume` differ from 0.4.0 for the same 
 - Run the Dikin and Vaidya walks through the stress suite
 - Run CRHMC through the stress suite
 - Check non-uniform targets against exact moments
-
-# Changelog
-
-All notable changes to this project will be documented in this file.
