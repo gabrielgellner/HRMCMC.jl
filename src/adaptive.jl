@@ -9,8 +9,8 @@ a [`Target`](@ref), and lengthen them until the second half of the chains has a 
 effective sample size of at least `target_ess` and a largest R̂ below `max_rhat` over the
 varying coordinates; the first half is discarded as burn-in (Gelman & Rubin 1992). With
 `multivariate = true`, the multivariate R̂ of the chains (see [`diagnostics`](@ref)) must
-also be below `max_rhat`; it grows with the number of coordinates, so above about 20 varying
-coordinates this needs an ESS of many thousands.
+also be below `max_rhat` plus its excess over 1 for independent draws of the same dimension
+and ESS (`multivariate_rhat_iid - 1`), which grows with the number of coordinates.
 
 The first round keeps `n` points per chain. Each later round sets the kept length from the
 effective samples per point of the last one, to 1.2 times the length that reaches
@@ -61,7 +61,8 @@ function sample_until_converged(
         end
         total, head = 2kept, kept + 1
         d = diagnostics(draws; multivariate)
-        mixed = d.max_rhat < max_rhat && (!multivariate || d.multivariate_rhat < max_rhat)
+        mixed = d.max_rhat < max_rhat &&
+            (!multivariate || d.multivariate_rhat < max_rhat + d.multivariate_rhat_iid - 1)
         converged = all(isnan, d.ess) || (d.min_ess >= target_ess && mixed)
         result = (;
             chains = draws, diagnostics = d, n = kept, thinning = rec * thinning, converged,
