@@ -226,6 +226,10 @@ sampler take long steps in thin directions:
 - `:ellipsoid` (or `true`): map the maximum-volume inscribed ellipsoid to the unit ball,
   repeatedly, until it is nearly a ball. Each round factors dense matrices of size the
   number of constraints.
+- `:barrier`: map the Dikin ellipsoid of the log barrier at its analytic center to the unit
+  ball, by damped Newton steps on `k × k` systems, as volesti, dingo and the COBRA Toolbox
+  offer. It is cheaper than `:ellipsoid` with many constraints and rounds less well: the
+  polytope lies within `m` times its ellipsoid, against `k` times for `:ellipsoid`.
 - `:samples`: draw billiard-walk samples and map their principal axes to equal lengths,
   repeatedly, as in multiphase Monte Carlo sampling. Runs one chain per thread and uses
   `rng`, so a seeded result depends on `Threads.nthreads()`.
@@ -267,8 +271,8 @@ function warmup(
         optimizer = HiGHS.Optimizer, atol::Real = 1.0e-8,
     )
     rounding = rounding === true ? :ellipsoid : rounding === false ? :none : rounding
-    rounding in (:ellipsoid, :samples, :none) ||
-        throw(ArgumentError("rounding must be :ellipsoid, :samples or :none, got :$rounding"))
+    rounding in (:ellipsoid, :barrier, :samples, :none) ||
+        throw(ArgumentError("rounding must be :ellipsoid, :barrier, :samples or :none, got :$rounding"))
     n = nvars(P)
     F, gap = fix_close_bounds(P, atol)
     gap > THIN_TOL && thin_warning(gap, atol)
@@ -289,6 +293,8 @@ function warmup(
     end
     if rounding === :ellipsoid
         round_polytope!(center, T, G, h; optimizer)
+    elseif rounding === :barrier
+        round_polytope!(center, T, G, h; optimizer, ellipsoid = :barrier)
     elseif rounding === :samples
         round_by_samples!(rng, S, center, T, G, h; optimizer)
     end

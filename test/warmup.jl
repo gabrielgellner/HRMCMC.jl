@@ -181,6 +181,37 @@ include(joinpath(@__DIR__, "fixtures", "wide_range_foodweb.jl"))
         )
     end
 
+    @testset "barrier rounding (#48)" begin
+        # The box [-1, 3] × [-1, 1] has its analytic center at (1, 0), with slacks 2, 2, 1, 1
+        # and Hessian diag(1/4 + 1/4, 1 + 1)
+        A = [1.0 0.0; -1.0 0.0; 0.0 1.0; 0.0 -1.0]
+        b = [3.0, 1.0, 1.0, 1.0]
+        H, c, converged = PolytopeSamplers.barrier_ellipsoid(A, b)
+        @test converged
+        @test c ≈ [1, 0] atol = 1.0e-8
+        @test H ≈ [0.5 0; 0 2] atol = 1.0e-8
+        @test_throws ArgumentError PolytopeSamplers.barrier_ellipsoid(A, [3.0, -0.5, 1.0, 1.0])
+        # The box [0, 100] × [0, 1] maps to a square in one round: the Dikin ellipsoid has
+        # semi-axes 50/√2 and 1/(2√2)
+        w = warmup(Polytope([0.0, 0.0], [100.0, 1.0]); rounding = :barrier)
+        @test w.rounded
+        @test w.center ≈ [50, 0.5] rtol = 1.0e-6
+        @test sort(svdvals(w.transform)) ≈ [0.5, 50] ./ sqrt(2) rtol = 1.0e-6
+        # A rotated box 1000 times longer in one direction samples correctly
+        Q = Matrix(PolytopeSamplers.qr(randn(Xoshiro(1), 5, 5)).Q)
+        s = [1000.0; ones(4)]
+        P = Polytope(fill(-2000.0, 5), fill(2000.0, 5); A = [Q'; -Q'], b = [s; s])
+        w = warmup(P; rounding = :barrier)
+        sv = svdvals(w.transform)
+        @test sv[1] / sv[end] ≈ 1000 rtol = 0.01
+        r = sample_until_converged(Xoshiro(2), w, BilliardWalk(); target_ess = 1000)
+        @test r.converged
+        # Q' x is uniform on the box with sides 2s, so its standard deviations are s/√3
+        X = reduce(hcat, r.chains)
+        @test all(abs.(vec(PolytopeSamplers.std(Q' * X; dims = 2)) ./ (s ./ sqrt(3)) .- 1) .< 0.1)
+        @test_throws ArgumentError warmup(P; rounding = :cube)
+    end
+
     @testset "maximum-volume ellipsoid of a box" begin
         A = [1.0 0.0; -1.0 0.0; 0.0 1.0; 0.0 -1.0]
         b = [3.0, 1.0, 1.0, 1.0] # [-1, 3] × [-1, 1]
