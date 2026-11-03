@@ -9,13 +9,15 @@ a [`Target`](@ref), and lengthen them until the second half of the chains has a 
 effective sample size of at least `target_ess` and a largest R̂ below `max_rhat` over the
 varying coordinates; the first half is discarded as burn-in (Gelman & Rubin 1992). With
 `multivariate = true`, the multivariate R̂ of the chains (see [`diagnostics`](@ref)) must
-also be below `max_rhat`.
+also be below `max_rhat`; it grows with the number of coordinates, so above about 20 varying
+coordinates this needs an ESS of many thousands.
 
 The first round keeps `n` points per chain. Each later round sets the kept length from the
 effective samples per point of the last one, to 1.2 times the length that reaches
 `target_ess`, at most twice the last length (as volesti's `mmcs` extrapolates its run from
 the ESS), and doubles it while R̂ is too high. Rounds stop once `max_n` points per chain are
-kept, counted at the given `thinning`.
+kept, counted at the given `thinning`; the chains have then run twice as many, the first
+half as burn-in.
 
 Only the kept half of each chain is stored. When it holds more than 20 points per
 effective sample (200 while the chains have fewer than 20 effective samples each), every
@@ -42,7 +44,7 @@ function sample_until_converged(
         multivariate::Bool = false,
     )
     nchains >= 2 || throw(ArgumentError("nchains must be at least 2 for R̂, got $nchains"))
-    n >= 4 || throw(ArgumentError("n must be at least 4, got $n"))
+    n >= 10 || throw(ArgumentError("n must be at least 10 for ESS and R̂, got $n"))
     max_n >= n || throw(ArgumentError("max_n must be at least n"))
     thinning >= 1 || throw(ArgumentError("thinning must be positive, got $thinning"))
     rngs = [Xoshiro(rand(rng, UInt64)) for _ in 1:nchains]

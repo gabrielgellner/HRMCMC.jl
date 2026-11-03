@@ -25,7 +25,7 @@ v.log_volume, v.log_stderr, 50 * log(2)
 
 The estimate multiplies volume ratios (multiphase Monte Carlo with cooling balls, Chalkis,
 Emiris & Fisikopoulos 2023). In the rounded coordinates of the warmup, balls centered at the
-warmup center shrink from one holding the polytope to one of which 10–15% lies inside it.
+warmup center shrink from the whole polytope to a ball of which 10–15% lies inside it.
 Each body `K ∩ B(ρᵢ₊₁)` holds about an eighth of `K ∩ B(ρᵢ)`, so a 63-dimensional food web
 polytope needs about 10 phases.
 
@@ -33,8 +33,9 @@ polytope needs about 10 phases.
   the ball.
 - Each ratio `vol(K ∩ B(ρᵢ₊₁)) / vol(K ∩ B(ρᵢ))` comes from coordinate hit-and-run chains
   on `K ∩ B(ρᵢ)`, continued from the chains whose points chose `ρᵢ₊₁`. The ratio is the
-  share of the chains' states inside `B(ρᵢ₊₁)` after each coordinate move, as volesti
-  counts them. The chains lengthen until R̂ is below 1.01 and the ratio's Monte Carlo
+  share of the chains' states inside `B(ρᵢ₊₁)` after each coordinate move. volesti also
+  counts after each move, of a coordinate chosen at random; here the coordinates are swept
+  in order. The chains lengthen until R̂ is below 1.01 and the ratio's Monte Carlo
   standard error meets its share of `error`, each round extrapolating the length from the
   last one's standard error.
 
@@ -42,6 +43,13 @@ The phases are independent, so the variance of the log volume is the sum of the 
 relative standard errors of the ratios. As in volesti, the share of the last ball, whose
 independent points are cheap, gets `error² / 4L` of that variance for `L` phases, and the
 ratios from chains split the rest.
+
+Without rounding (`rounding = :none`), the pilot chains on a long, thin polytope have not
+mixed after their 100 sweeps of burn-in, so the schedule can stop after one or two balls with
+a ratio far from 1/8. On an 8-dimensional box 200 times longer in one direction, rotated, 12
+runs gave z-scores with root mean square 1.66, and every one returned `converged = false`
+with a warning. With the default rounding the same box gave 1.01. Keep rounding on, and do
+not use an estimate with `converged = false`.
 
 ## Calibration
 

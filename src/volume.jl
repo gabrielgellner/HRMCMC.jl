@@ -30,7 +30,8 @@ Returns a named tuple:
 - `radii`: the radii of the balls, from `Inf` (the polytope itself) to the last ball;
 - `ratios`: the estimated share of each body inside the next ball, then the share of the
   last ball inside the polytope;
-- `converged`: whether every phase reached its error before `max_n` points per chain;
+- `converged`: whether every phase reached its error before keeping `max_n` sweeps per chain
+  (of `2max_n` run);
 - `warmup`.
 
 This adapts the annealing schedule of volesti's `volume_cooling_balls` and differs in its
@@ -55,7 +56,7 @@ function volume(
     )
     error > 0 || throw(ArgumentError("error must be positive, got $error"))
     nchains >= 2 || throw(ArgumentError("nchains must be at least 2 for R̂, got $nchains"))
-    n >= 4 || throw(ArgumentError("n must be at least 4, got $n"))
+    n >= 10 || throw(ArgumentError("n must be at least 10 for R̂, got $n"))
     max_n >= n || throw(ArgumentError("max_n must be at least n"))
     k = size(w.transform, 2)
     k == 0 && return (;
