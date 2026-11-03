@@ -380,9 +380,10 @@ end
 
 # A chain state at a uniform random point of the largest ball around the warmup center
 # `z = 0` inside the polytope. Its radius is the smallest slack `minimum(h)`, as the rows of
-# `G` have unit norm; `w.radius` belongs to the Chebyshev ball, whose center is `z = 0` only
-# without rounding or extreme points. For a target that is zero on part of the ball, the
-# point is drawn again, up to START_TRIES times, until the density there is positive.
+# `G` have unit norm; `w.radius` is this radius after ellipsoid rounding and otherwise
+# belongs to the Chebyshev ball, whose center is `z = 0` only without rounding or extreme
+# points. For a target that is zero on part of the ball, the point is drawn again, up to
+# START_TRIES times, until the density there is positive.
 function start_state(method::PolytopeSampler, model, rng::AbstractRNG)
     w = geometry(model)
     check_unbounded_method(method, w)
