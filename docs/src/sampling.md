@@ -110,15 +110,22 @@ not be used.
 R̂ of each coordinate can miss chains that disagree along a direction such as `x₁ - x₂`
 that is narrow compared with the coordinates' ranges. `diagnostics(chains; multivariate =
 true)` adds the multivariate R̂ of Brooks & Gelman (1998), the largest R̂ of any linear
-combination of the coordinates, and `sample_until_converged(...; multivariate = true)` runs
-until it is below `max_rhat` too:
+combination of the coordinates.
+
+The multivariate R̂ grows with the number of coordinates even when the chains agree, as the
+eight half-chain means of four chains estimate a covariance in every direction. For 4 chains
+of 1000 independent normal draws it was 1.006 in 10 dimensions, 1.025 in 50 and 1.087 in 200.
+`diagnostics` also returns `multivariate_rhat_iid`, its mean for independent draws with the
+same dimension, chain length and ESS, which was within 0.002 of those values.
+`sample_until_converged(...; multivariate = true)` runs until the multivariate R̂ exceeds
+that reference by less than `max_rhat - 1`:
 
 ```@example sampling
 r = sample_until_converged(Xoshiro(2), w, CoordinateHitAndRun(); multivariate = true)
-r.diagnostics.multivariate_rhat
+r.diagnostics.multivariate_rhat, r.diagnostics.multivariate_rhat_iid
 ```
 
-The multivariate R̂ grows with the number of coordinates even when the chains agree. For 4
-chains of independent normal draws with an ESS near 3500, it was 1.007 in 10 dimensions,
-1.03 in 50 and 1.10 in 200; in 200 dimensions it fell to 1.02 only at an ESS of 14 000. Above
-a few dozen coordinates, compare it with those values.
+Two of four chains shifted by 0.3 standard deviations along one direction of 200 exceed the
+reference by more than 0.01 (50 of 50 seeds), while every coordinate's R̂ stays below 1.01.
+On a 282-variable food web the billiard walk ran to 8000 points per chain with this rule,
+against 2000 for the coordinates' R̂ alone, whose chains exceeded the reference by 0.057.

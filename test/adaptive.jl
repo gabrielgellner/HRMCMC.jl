@@ -124,6 +124,14 @@ end
         @test r.converged
         @test r.diagnostics.multivariate_rhat < 1.01
         @test isnan(sample_until_converged(Xoshiro(1), w, CoordinateHitAndRun(); target_ess = 400).diagnostics.multivariate_rhat)
+        # In 50 dimensions the multivariate R̂ of agreeing chains is near 1.06 at an ESS of
+        # 1000, and the cutoff adds its value for independent draws (#104); over 50 seeds
+        # every run converged by 16 000 points with the moments within the tolerances
+        simplex = warmup(Polytope(zeros(50), ones(50); A = ones(1, 50), b = [1.0]))
+        r = sample_until_converged(Xoshiro(1), simplex, CoordinateHitAndRun(); multivariate = true)
+        @test r.converged
+        @test r.diagnostics.multivariate_rhat < 1.01 + r.diagnostics.multivariate_rhat_iid - 1
+        @test moments_match(r.diagnostics, fill(1 / 51, 50), fill(sqrt(50 / (51^2 * 52)), 50))
     end
 
     @testset "argument checks" begin

@@ -1,4 +1,5 @@
 using PolytopeSamplers: PolytopeSamplers, HitAndRun, MCMCSerial, Polytope, diagnostics, sample, warmup
+using LinearAlgebra: normalize
 using Random: Xoshiro
 using Statistics: mean
 
@@ -65,7 +66,9 @@ using Statistics: mean
         d = diagnostics(chains; multivariate = true)
         @test d.max_rhat < 1.01
         @test d.multivariate_rhat > 5
+        @test d.multivariate_rhat_iid < 1.01
         @test isnan(diagnostics(chains).multivariate_rhat)
+        @test isnan(diagnostics(chains).multivariate_rhat_iid)
         # Points on the slice x₁ + x₂ = 1 with a constant coordinate have a singular
         # covariance
         slice = map(1:4) do seed
@@ -75,9 +78,20 @@ using Statistics: mean
         @test 1 <= diagnostics(slice; multivariate = true).multivariate_rhat < 1.01
         @test 1 <= diagnostics([rand(Xoshiro(seed), 3, 1000) for seed in 1:4]; multivariate = true).multivariate_rhat < 1.01
         # It grows with the number of coordinates for independent draws, as the docstring
-        # says: from 1.075 to 1.106 over 50 seeds in 200 dimensions
+        # says, and the reference for independent draws follows it: over 50 seeds in 200
+        # dimensions it was 1.088 on average and the reference 1.088, and 3 seeds exceeded the
+        # reference by more than 0.01
         chains = [randn(Xoshiro(seed), 200, 1000) for seed in 1:4]
-        @test 1.05 < diagnostics(chains; multivariate = true).multivariate_rhat < 1.15
+        d = diagnostics(chains; multivariate = true)
+        @test 1.05 < d.multivariate_rhat < 1.15
+        @test abs(d.multivariate_rhat - d.multivariate_rhat_iid) < 0.02
+        # Two of four chains shifted by 0.3 standard deviations along a random direction in
+        # 200 dimensions exceed the reference by more than 0.01 (50 of 50 seeds)
+        u = normalize(randn(Xoshiro(0), 200))
+        shifted = [randn(Xoshiro(seed), 200, 4000) .+ (seed > 2 ? 0.3 : 0.0) .* u for seed in 1:4]
+        d = diagnostics(shifted; multivariate = true)
+        @test d.max_rhat < 1.01
+        @test d.multivariate_rhat > d.multivariate_rhat_iid + 0.01
     end
 
     @testset "coordinates in blocks" begin
