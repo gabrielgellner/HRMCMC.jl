@@ -1,5 +1,5 @@
 using PolytopeSamplers: Polytope, Warmup, ranges, warmup
-using LinearAlgebra: Diagonal, I, isposdef, norm, rank, svdvals
+using LinearAlgebra: Diagonal, I, isposdef, norm, rank, svd, svdvals
 using PolytopeSamplers: PolytopeSamplers, BilliardWalk, sample, sample_until_converged
 using Random: Xoshiro
 using Test: @test_logs
@@ -368,6 +368,14 @@ include(joinpath(@__DIR__, "fixtures", "wide_range_foodweb.jl"))
         M = [1.0 0.0; 0.0 -1.0e-12]
         @test isposdef(PolytopeSamplers.nearest_spd(M))
         @test PolytopeSamplers.nearest_spd(M) ≈ [1.0 0.0; 0.0 0.0] atol = 1.0e-10
+        # It matches PolyRound's (B + U S Uᵀ) / 2 from the SVD of the symmetric part, which
+        # it computes by the symmetric eigensolver instead, as the SVD failed to converge
+        # with multithreaded BLAS (#115)
+        X = randn(Xoshiro(3), 6, 6)
+        B = (X .+ X') ./ 2
+        F = svd(B)
+        @test PolytopeSamplers.nearest_spd(X) ≈ (B .+ F.U * Diagonal(F.S) * F.U') ./ 2 atol = 1.0e-8
+        @test isposdef(PolytopeSamplers.nearest_spd(X))
     end
 
     @testset "solver settings and very wide polytopes" begin
