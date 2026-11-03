@@ -14,8 +14,8 @@ product of the volume of the last ball, the share of it inside `K`, estimated fr
 independent uniform points of the ball, and the ratios `vol(K ∩ B(ρᵢ)) / vol(K ∩ B(ρᵢ₊₁))`,
 each estimated from `nchains` coordinate hit-and-run chains on `K ∩ B(ρᵢ)`, continued from
 the chains that chose the radius `ρᵢ₊₁`. A ratio is the share of the chains' states inside
-the next ball after each coordinate move. The chains lengthen, from `n` sweeps and keeping
-the second half, until R̂ of the distance from the center is below 1.01 and the Monte Carlo
+the next ball after each coordinate move. The chains first run `2n` sweeps and keep the last
+`n`, then lengthen, keeping the second half, until R̂ of the distance from the center is below 1.01 and the Monte Carlo
 standard error of the ratio is small enough for `error`; each round extrapolates the length
 from the last one's standard error, at most doubling it. The variance `error²` of the log
 volume is split as in volesti: `error² / 4L` for the share of the last ball, whose
@@ -261,8 +261,9 @@ function body_ratio(chains, ρ_next; target, n, max_n)
         ok = r > 0 && rhat < 1.01 && se <= target * r
         (ok || kept >= max_n) && return r, se, ok
         # The standard error falls as 1/√kept: 1.2 times the length that reaches the target,
-        # at most twice this one, or twice while R̂ is too high or no point is inside
-        grow = rhat < 1.01 && r > 0 ? 1.2 * (se / (target * r))^2 : 2.0
+        # at most twice this one, or twice while R̂ is too high, no point is inside or the
+        # standard error is NaN (mcse of a window of constant fractions)
+        grow = rhat < 1.01 && r > 0 && isfinite(se) ? 1.2 * (se / (target * r))^2 : 2.0
         kept = min(clamp(ceil(Int, grow * kept), kept + 1, 2kept), max_n)
     end
     return
