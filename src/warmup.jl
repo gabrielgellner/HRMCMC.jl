@@ -434,6 +434,11 @@ function fix_close_bounds(P::Polytope, atol)
     return Polytope(lower, upper, P.A, P.b, P.C, P.d), gap
 end
 
+# PolytopeSamplerMatlab, volesti's CRHMC and PolyRound repeat their reductions until nothing
+# changes, as removing rows by their structure can expose more. Each program here measures
+# a constraint against the polytope itself, which the equalities found later do not change,
+# so one pass leaves nothing to remove: on food webs of 88 to 1082 variables (#83, #87) an
+# LP test of every row of the final `G` found no redundant row.
 # Adapted from PolyRound, PolyRound/static_classes/constraint_removal_reduction.py (commit
 # 6d3aee7, MIT; Copyright (c) 2026 PolyRound contributors): `P` without its redundant
 # constraints, and the number removed. A bound or inequality is redundant when, with its
@@ -819,3 +824,11 @@ end
 # Cholesky threshold of PolytopeSamplerMatlab (1e-12 on squared diagonals) and the QR
 # threshold of polytopewalk (1e-5)
 const RANK_TOL = 1.0e-6
+
+# The slice is computed in Float64, where PolytopeSamplerMatlab uses double-double for its
+# equality and Cholesky algebra and the COBRA Toolbox raises the precision until a
+# factorization is accurate. Rows within RANK_TOL of the span of the others are left out
+# instead, as PolytopeSamplerMatlab and polytopewalk do, so samples may miss such a row by
+# about RANK_TOL times the slice's width. Samples of food webs with 15 to 50 equalities met
+# them to a relative 2.5e-13 to 1.1e-9; a system with condition number 1e10 failed in the
+# linear programs, which double-double would not change.
