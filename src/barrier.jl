@@ -151,6 +151,10 @@ end
 # hops also solves with the lower factor (DikinProposal.hpp), but its ratio uses the same
 # metric `LᵀL`, so hops is a valid chain whose metric is not the Dikin ellipsoid.
 # Like polytopewalk, and unlike volesti, the chain is not lazy.
+# A John or Lee–Sidford walk added here must compute its weights from the same starting
+# weights at every point, or iterate to about 1e-10: polytopewalk (JohnWalk.cpp,
+# DikinLSWalk.cpp) and volesti (john_walker.h) start from the previous call's weights and
+# stop at 1e-5, which makes the metric depend on the chain's history and breaks the ratio.
 function step!(rng::AbstractRNG, c::BarrierState)
     k = length(c.z)
     k == 0 && return update_x!(c)
@@ -164,6 +168,9 @@ function step!(rng::AbstractRNG, c::BarrierState)
         c.ready = true
     end
     randn!(rng, c.step)
+    # ‖U step‖² = scale² ‖ξ‖² for step = scale U⁻¹ ξ, so the forward term of the Metropolis
+    # ratio needs no triangular multiply
+    qz = sum(abs2, c.step) / 2
     ldiv!(UpperTriangular(c.U), c.step)
     c.step .*= c.scale
     for i in eachindex(c.z)
@@ -180,10 +187,9 @@ function step!(rng::AbstractRNG, c::BarrierState)
     if inside
         logdet = factor_hessian!(c.Uprop, c, c.slackprop)
         if isfinite(logdet)
-            qz = quadratic_form!(c.work, c.U, c.step)
-            qprop = quadratic_form!(c.work, c.Uprop, c.step)
+            qprop = quadratic_form!(c.work, c.Uprop, c.step) / (2 * c.scale^2)
             logp = logdensity_or_zero(c.density, c.zprop)
-            logα = logp - c.logp + logdet - c.logdet - (qprop - qz) / (2 * c.scale^2)
+            logα = logp - c.logp + logdet - c.logdet - (qprop - qz)
             if log(rand(rng)) < logα
                 c.logp = logp
                 copyto!(c.z, c.zprop)
