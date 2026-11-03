@@ -257,7 +257,10 @@ food web with 282 variables, pruning removes 502 of 796 constraints and the warm
 6.4 s instead of 16.2 s. The programs are slow when `A` is dense: with 200 variables and
 1000 dense inequalities they took 90 times as long as the rest of the warmup, so pass
 `prune = false` for such polytopes. `w.polytope` keeps every constraint, and `w.removed`
-counts those left out.
+counts those left out. The programs are split over `Threads.nthreads()` tasks; with more
+than one, each removed constraint takes one more program, which checks it against the kept
+constraints alone. On a food web with 3160 variables, where 4696 of 7851 constraints are
+redundant, pruning took 67 s on 4 threads against 125 s on one.
 
 `warmup` first rescales the variables by geometric-mean scaling, as PolytopeSamplerMatlab
 does, so that the constraint coefficients of each variable are near 1, and solves its linear
@@ -476,63 +479,125 @@ end
 # the model before the next is tested, so of two identical rows one is kept. Unlike
 # PolyRound, which first solves the program without the raise to find the rows that hold
 # with equality, this solves one program per constraint; `warmup` finds the equalities.
-function remove_redundant(P::Polytope, optimizer)
+#
+# The constraints are split into `chunks` runs (default `Threads.nthreads()`), each tested in
+# order on its own model and task: 7851 programs took 125 s on one thread and 67 s on 4 on a
+# 100-species food web (#120). Constraints that are each redundant can be needed together,
+# as two identical rows tested in different runs both leave their models. So with more than
+# one run every removed constraint is tested again against the kept constraints alone, those
+# that the kept constraints do not imply are restored, and the restored ones are then tested
+# one after another as on one thread. The kept constraints imply every removed one, so they
+# define the same polytope.
+function remove_redundant(P::Polytope, optimizer; chunks::Integer = Threads.nthreads())
+    A, b = unit_rows(P.A, P.b)
+    candidates = Tuple{Symbol, Int}[]
+    for i in eachindex(P.upper)
+        P.lower[i] == P.upper[i] && continue
+        isfinite(P.upper[i]) && push!(candidates, (:upper, i))
+        isfinite(P.lower[i]) && push!(candidates, (:lower, i))
+    end
+    append!(candidates, ((:row, i) for i in eachindex(b)))
+    # An empty run still checks that the polytope is not empty
+    runs = isempty(candidates) ? [candidates] :
+        collect(Iterators.partition(candidates, cld(length(candidates), max(chunks, 1))))
+    tasks = map(run -> Threads.@spawn(prune_run(P, A, b, optimizer, run, ())), runs)
+    removed = reduce(vcat, fetched.(tasks); init = Tuple{Symbol, Int}[])
+    if length(runs) > 1 && !isempty(removed)
+        Q = without(P, removed)
+        parts = Iterators.partition(removed, cld(length(removed), length(runs)))
+        tasks = map(part -> Threads.@spawn(not_implied(P, Q, A, b, optimizer, part)), parts)
+        restored = reduce(vcat, fetched.(tasks); init = Tuple{Symbol, Int}[])
+        if !isempty(restored)
+            kept = setdiff(removed, restored)
+            removed = [kept; prune_run(P, A, b, optimizer, restored, kept)]
+        end
+    end
+    return without(P, removed), length(removed)
+end
+
+# `P` without the bounds and inequalities in `removed`
+function without(P::Polytope, removed)
+    lower, upper = copy(P.lower), copy(P.upper)
+    keep = trues(length(P.b))
+    for (kind, i) in removed
+        kind === :upper ? (upper[i] = Inf) : kind === :lower ? (lower[i] = -Inf) : (keep[i] = false)
+    end
+    return Polytope(lower, upper, P.A[keep, :], P.b[keep], P.C, P.d)
+end
+
+# The model of `P` without the constraints in `removed`, its variables and the rows of
+# `A * x .<= b`
+function pruned_model(P::Polytope, optimizer, removed)
     model, x, rows = lp_model(P, optimizer)
+    for (kind, i) in removed
+        kind === :upper ? delete_upper_bound(x[i]) : kind === :lower ? delete_lower_bound(x[i]) :
+            delete(model, rows[i])
+    end
+    return model, x, rows
+end
+
+# The left-hand side and right-hand side of a candidate constraint as `f ≤ rhs`, with the
+# inequality rows `A`, `b` of unit norm
+function candidate(x, A, b, P, (kind, i))
+    kind === :upper && return x[i], P.upper[i]
+    kind === :lower && return -x[i], -P.lower[i]
+    return sum(A[i, j] * x[j] for j in axes(A, 2) if A[i, j] != 0; init = 0.0), b[i]
+end
+
+raise(r) = max(1.0, abs(r))
+
+# Whether `f ≤ rhs` holds over the feasible set of `model`, to the tolerance above. A program
+# that is not solved keeps its constraint, as in hops (LinearProgramClpImpl.cpp, commit
+# b62592e, MIT). A solution that violates `P` by more than 100 times the solver's
+# feasibility tolerance is inaccurate and keeps it too, the check of PolyRound's
+# `check_lps` (lp_interfacing.py, commit 6d3aee7, MIT): a redundant constraint holds at
+# every point of the program, so such a point shows the solve went wrong. Inaccurate
+# optimal points removed binding bounds before #83.
+function implied(model, x, f, rhs, P)
+    @objective(model, MAX_SENSE, f)
+    solve!(model)
+    is_solved_and_feasible(model) || return false
+    value(f) <= rhs + THIN_TOL * raise(rhs) || return false
+    return constraint_violation(P, value.(x)) <= LP_CHECK_TOL
+end
+
+# The constraints of `run` found redundant one after another on the model of `P` without
+# `removed`, each raised while it is tested and left out of the model once found redundant
+function prune_run(P::Polytope, A, b, optimizer, run, removed)
+    model, x, rows = pruned_model(P, optimizer, removed)
     solve!(model)
     check_feasible(model)
-    lower, upper = copy(P.lower), copy(P.upper)
-    A, b = unit_rows(P.A, P.b)
-    keep = trues(length(b))
-    removed = 0
-    raise(r) = max(1.0, abs(r))
-    # A program that is not solved keeps its constraint, as in hops
-    # (LinearProgramClpImpl.cpp, commit b62592e, MIT). A solution that violates `P` by more
-    # than 100 times the solver's feasibility tolerance is inaccurate and keeps it too, the
-    # check of PolyRound's `check_lps` (lp_interfacing.py, commit 6d3aee7, MIT): a removed
-    # constraint holds at every point of the relaxed program, so such a point shows the
-    # solve went wrong. Inaccurate optimal points removed binding bounds before #83.
-    function redundant(f, rhs)
-        @objective(model, MAX_SENSE, f)
-        solve!(model)
-        is_solved_and_feasible(model) || return false
-        value(f) <= rhs + THIN_TOL * raise(rhs) || return false
-        return constraint_violation(P, value.(x)) <= LP_CHECK_TOL
-    end
-    for i in eachindex(upper)
-        lower[i] == upper[i] && continue
-        if isfinite(upper[i])
-            set_upper_bound(x[i], upper[i] + raise(upper[i]))
-            if redundant(x[i], upper[i])
-                delete_upper_bound(x[i])
-                upper[i] = Inf
-                removed += 1
-            else
-                set_upper_bound(x[i], upper[i])
-            end
-        end
-        if isfinite(lower[i])
-            set_lower_bound(x[i], lower[i] - raise(lower[i]))
-            if redundant(-x[i], -lower[i])
-                delete_lower_bound(x[i])
-                lower[i] = -Inf
-                removed += 1
-            else
-                set_lower_bound(x[i], lower[i])
-            end
-        end
-    end
-    for i in eachindex(b)
-        set_normalized_rhs(rows[i], b[i] + raise(b[i]))
-        if redundant(sum(A[i, j] * x[j] for j in axes(A, 2) if A[i, j] != 0; init = 0.0), b[i])
-            delete(model, rows[i])
-            keep[i] = false
-            removed += 1
+    found = Tuple{Symbol, Int}[]
+    for c in run
+        kind, i = c
+        f, rhs = candidate(x, A, b, P, c)
+        if kind === :upper
+            set_upper_bound(x[i], rhs + raise(rhs))
+            implied(model, x, f, rhs, P) ? (delete_upper_bound(x[i]); push!(found, c)) : set_upper_bound(x[i], rhs)
+        elseif kind === :lower
+            set_lower_bound(x[i], P.lower[i] - raise(rhs))
+            implied(model, x, f, rhs, P) ? (delete_lower_bound(x[i]); push!(found, c)) : set_lower_bound(x[i], P.lower[i])
         else
-            set_normalized_rhs(rows[i], b[i])
+            set_normalized_rhs(rows[i], rhs + raise(rhs))
+            implied(model, x, f, rhs, P) ? (delete(model, rows[i]); push!(found, c)) : set_normalized_rhs(rows[i], rhs)
         end
     end
-    Q = Polytope(lower, upper, P.A[keep, :], P.b[keep], P.C, P.d)
-    return Q, removed
+    return found
+end
+
+# The constraints of `part`, constraints of `P`, that `Q`, the polytope without them, does not
+# imply
+function not_implied(P::Polytope, Q::Polytope, A, b, optimizer, part)
+    model, x, _ = lp_model(Q, optimizer)
+    return [c for c in part if !implied(model, x, candidate(x, A, b, P, c)..., Q)]
+end
+
+# The result of task `t`, rethrowing the error that stopped it in place of the
+# `TaskFailedException` that wraps it
+function fetched(t)
+    wait(t; throw = false)
+    istaskfailed(t) && throw(t.exception)
+    return fetch(t)
 end
 
 # The extreme points of each coordinate, a center inside the polytope, and a basis of the
