@@ -102,6 +102,16 @@ include(joinpath(@__DIR__, "fixtures", "wide_range_foodweb.jl"))
         @test Q.A == [1.0 0.0 0.0]
         @test Q.lower == zeros(3)
         @test Q.upper == [Inf, 1.0, 1.0]
+        # Split into runs, the three copies of x₁ ≤ 1 can each leave their own run's model;
+        # the second pass restores them and keeps one, as one run does
+        for chunks in 2:10
+            Qc, removedc = PolytopeSamplers.remove_redundant(P, PolytopeSamplers.HiGHS.Optimizer; chunks)
+            @test removedc == 4
+            @test Qc.A == Q.A && Qc.lower == Q.lower && Qc.upper == Q.upper
+        end
+        @test_throws ArgumentError("the polytope is empty") PolytopeSamplers.remove_redundant(
+            Polytope(zeros(2), ones(2); A = [1.0 1.0], b = [-1.0]), PolytopeSamplers.HiGHS.Optimizer; chunks = 3,
+        )
         for extremes in (false, true)
             w = warmup(P; extremes)
             @test w.polytope === P
@@ -400,6 +410,12 @@ include(joinpath(@__DIR__, "fixtures", "wide_range_foodweb.jl"))
         @test size(w.transform, 2) == 79
         @test 0.9 < w.radius < 1.1
         @test w.removed == 44
+        # Runs on several tasks keep the constraints that one run keeps
+        S = first(PolytopeSamplers.scaled_polytope(P))
+        Q1, _ = PolytopeSamplers.remove_redundant(S, PolytopeSamplers.HiGHS.Optimizer; chunks = 1)
+        Q4, removed4 = PolytopeSamplers.remove_redundant(S, PolytopeSamplers.HiGHS.Optimizer; chunks = 4)
+        @test removed4 == 44
+        @test Q4.A == Q1.A && Q4.lower == Q1.lower && Q4.upper == Q1.upper
         # atol keeps its meaning in units of x: coordinates narrower than 1e-6 are fixed
         w6 = @test_logs (:warn, r"fixed directions") match_mode = :any warmup(Xoshiro(1), P; atol = 1.0e-6)
         @test length(PolytopeSamplers.fixed_coordinates(w6)) == 7

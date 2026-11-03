@@ -98,8 +98,10 @@ sampler costs time in proportion to the number of constraints, so with `prune = 
 default) `warmup` solves one linear program per finite bound and inequality and leaves the
 redundant ones out of `G` and `h`. It uses the test of PolyRound: raise the right-hand side
 `r` by `max(1, |r|)` and check whether the maximum over the polytope still meets the
-original. `w.polytope`
-keeps every constraint, and `w.removed` counts those left out. The upper bounds of the
+original. The programs run on `Threads.nthreads()` tasks, and with more than one a second
+pass checks each removed constraint against the kept constraints alone, as two identical
+rows tested on different tasks would otherwise both be removed. `w.polytope` keeps every
+constraint, and `w.removed` counts those left out. The upper bounds of the
 triangle are reached only at its vertices:
 
 ```@example polytopes
