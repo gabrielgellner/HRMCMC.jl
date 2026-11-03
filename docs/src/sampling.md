@@ -117,3 +117,8 @@ until it is below `max_rhat` too:
 r = sample_until_converged(Xoshiro(2), w, CoordinateHitAndRun(); multivariate = true)
 r.diagnostics.multivariate_rhat
 ```
+
+The multivariate R̂ grows with the number of coordinates even when the chains agree. For 4
+chains of independent normal draws with an ESS near 3500, it was 1.007 in 10 dimensions,
+1.03 in 50 and 1.10 in 200; in 200 dimensions it fell to 1.02 only at an ESS of 14 000. Above
+a few dozen coordinates, compare it with those values.
