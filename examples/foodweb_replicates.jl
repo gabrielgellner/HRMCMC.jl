@@ -6,10 +6,8 @@
 
 include("foodweb_study.jl")
 
-using FoodWebs: feasible_growth_rates, generalized_cascade_network, sample_communities,
-    spectral_abscissa
 using LinearAlgebra: BLAS
-using PolytopeSamplers: PolytopeSamplers
+using PolytopeSamplers: BilliardWalk, sample_until_converged, warmup
 using Random: Xoshiro
 using Statistics: mean
 
@@ -18,11 +16,11 @@ BLAS.set_num_threads(1)
 
 function replicate(seed; S = 15, C = 0.15)
     rng = Xoshiro(seed)
-    web = generalized_cascade_network(rng, S, C; basal_paths = true)
+    web = generalized_cascade_network(rng, S, C)
     x = pyramid_biomass(rng, web)
-    (; communities) = feasible_growth_rates(rng, web, x; constraints...)
-    result = sample_communities(rng, communities; target_ess = 1_000)
-    return mean(spectral_abscissa(c.J) < 0 for c in result.communities)
+    (; fw, P) = feasible_food_web(rng, web, x)
+    result = sample_until_converged(rng, warmup(rng, P), BilliardWalk(); target_ess = 1_000)
+    return mean(is_stable(community_matrix(fw, θ)) for X in result.chains for θ in eachcol(X))
 end
 
 let N = 80

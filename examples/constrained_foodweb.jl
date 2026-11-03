@@ -1,26 +1,19 @@
-# Sample the interaction strengths of one food web with each sampler and compare them.
-# FoodWebs.jl builds the polytope: `FeasibleCommunities` holds the Lotka–Volterra parameters
-# with an equilibrium at the biomasses `x`, and its PolytopeSamplers.jl extension converts it
-# to a `Polytope`. Run with `just example constrained_foodweb`.
+# Sample the interaction strengths of one food web with each sampler and compare them. The
+# polytope holds the Lotka–Volterra parameters with an equilibrium at the biomasses `x` (see
+# `foodweb_study.jl`). Run with `just example constrained_foodweb`.
 
 include("foodweb_study.jl")
 
-using FoodWebs: community_matrix, feasible_growth_rates, generalized_cascade_network,
-    spectral_abscissa
 using PolytopeSamplers: ACHR, BilliardWalk, CoordinateHitAndRun, HitAndRun, MCMCThreads,
-    Polytope, diagnostics, mmcs, sample, warmup
+    diagnostics, mmcs, sample, warmup
 using Random: Xoshiro
 using Statistics: mean
 
 let rng = Xoshiro(2026), S = 15
-    web = generalized_cascade_network(rng, S, 0.15; basal_paths = true)
+    web = generalized_cascade_network(rng, S, 0.15)
     x = pyramid_biomass(rng, web)
-
-    # Growth rates redrawn until the equilibrium is feasible
-    (; communities, draws) = feasible_growth_rates(rng, web, x; constraints...)
-    P = Polytope(communities)
-    stable_fraction(chains) =
-        mean(spectral_abscissa(community_matrix(communities, θ)) < 0 for X in chains for θ in eachcol(X))
+    (; fw, P, draws) = feasible_food_web(rng, web, x)
+    stable_fraction(chains) = mean(is_stable(community_matrix(fw, θ)) for X in chains for θ in eachcol(X))
 
     unrounded = warmup(P; rounding = false)
     t_round = @elapsed rounded = warmup(P)

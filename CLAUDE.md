@@ -67,15 +67,12 @@ use is sampling the interaction strengths of food webs consistent with an equili
   `docs/src/` run their `@example` blocks at build time, so a stale example fails the
   build; `checkdocs = :exports` fails it when an exported name is missing from `api.md`.
   Update the benchmark tables in `samplers.md` when a sampler's performance changes.
-- `examples/`: worked problems, as a separate project outside the workspace, with
-  FoodWebs.jl from GitHub pinned to a release tag and this package by path. `just ci`, CI
-  and the docs never resolve FoodWebs, so a release of this package does not wait for a
-  FoodWebs release whose compat allows it; move the pin once FoodWebs has one.
-  `foodweb_study.jl` holds the settings of the original study (constraints,
-  pyramid biomasses), `constrained_foodweb.jl` compares the samplers on one web,
-  `foodweb_replicates.jl` runs many webs in parallel threads. FoodWebs.jl builds the food
-  web polytope (`FeasibleCommunities`). Food web code may live here; move it to FoodWebs.jl
-  once it is general or useful beyond these examples.
+- `examples/`: worked problems, as a separate project with this package by path and
+  standard libraries only. `foodweb_study.jl` builds the webs, biomasses, growth rates and
+  polytope of the original study (adapted from FoodWebs.jl v0.9.2, kept free of it so that
+  a release never waits on a FoodWebs release), `constrained_foodweb.jl` compares the
+  samplers on one web, `foodweb_replicates.jl` runs many webs in parallel threads. The
+  docs page `foodwebs.md` includes `foodweb_study.jl` and runs it at build time.
 - The 2018–2019 history of the original prototype is kept in git; the package was rewritten
   in 2026 for Julia 1.13.
 

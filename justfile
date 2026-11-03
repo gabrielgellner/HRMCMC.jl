@@ -46,8 +46,6 @@ ci: fmt-check lint test
 # Run the tests in a copy of the repository without its manifests, so that every environment
 # is resolved from scratch as on CI and for users; this catches compat bounds that a local
 # manifest hides. Run it before a release or after changing a dependency or a compat entry.
-# The examples are outside the workspace, so this does not resolve FoodWebs, whose compat
-# bound failed the release of #82.
 ci-fresh:
     #!/usr/bin/env bash
     set -euo pipefail
