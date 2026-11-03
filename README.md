@@ -124,13 +124,13 @@ Carlo standard errors.
   them on first use; it is only approximately Markov and the slowest method on rounded
   polytopes.
 
-On the 63-dimensional food web polytope of the example (four chains of 2000 points):
+On the 65-dimensional food web polytope of the example (four chains of 2000 points):
 
 | Sampler | min ESS | max R̂ | ESS/s |
 |---|---|---|---|
-| HitAndRun, unrounded (the 2019 version) | 19 | 2.03 | 17 |
-| CoordinateHitAndRun | 1464 | 1.005 | 2210 |
-| BilliardWalk | 7262 | 1.001 | 6690 |
+| HitAndRun, unrounded (the 2019 version) | 18 | 2.38 | 12 |
+| CoordinateHitAndRun | 3591 | 1.002 | 5177 |
+| BilliardWalk | 7140 | 1.001 | 6683 |
 
 Estimates agree with hopsy 1.7 on the same polytopes within their Monte Carlo standard
 errors.
@@ -172,7 +172,7 @@ Set `BLAS.set_num_threads(1)` when Julia threads keep every core busy. Measured 
 
 | Work | 1 thread | 4 threads | 10 threads |
 |---|---|---|---|
-| 80 food web replicates (63 dimensions, to 1000 ESS each) | 42.0 s | 17.9 s | 10.4 s |
+| 80 food web replicates (15 species, to 1000 ESS each) | 54.4 s | 15.3 s | 10.4 s |
 | 4 billiard chains of 4000 steps, 200 dimensions | 5.3 s | 1.6 s | |
 
 Chains in one run gain little past the number of performance cores, as the slowest chain
@@ -190,7 +190,7 @@ sets the time; batches of independent problems keep gaining.
 `examples/constrained_foodweb.jl` samples the interaction strengths of a food web consistent
 with a given equilibrium, the problem of
 [constrained-foodwebs](https://github.com/gabrielgellner/constrained-foodwebs), with the webs and
-the polytope from [FoodWebs.jl](https://github.com/gabrielgellner/FoodWebs.jl). Run it with
+the polytope built in `examples/foodweb_study.jl`. Run it with
 `just example constrained_foodweb`; `just example foodweb_replicates` runs 80 webs in
 parallel.
 

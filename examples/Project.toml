@@ -1,10 +1,8 @@
 [deps]
-FoodWebs = "6d07a039-1ac1-577b-a10e-abe3f3d3fc7d"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 PolytopeSamplers = "23957194-1ca4-53c5-ae50-e0ed682cc5dc"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [sources]
-FoodWebs = {rev = "v0.9.2", url = "https://github.com/gabrielgellner/FoodWebs.jl"}
 PolytopeSamplers = {path = ".."}

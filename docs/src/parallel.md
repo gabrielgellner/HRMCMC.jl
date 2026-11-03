@@ -37,7 +37,7 @@ On a 10-core Apple machine (4 performance and 6 efficiency cores):
 
 | Work | 1 thread | 4 threads | 10 threads |
 |---|---|---|---|
-| 80 food web replicates (63 dimensions, to 1000 ESS each) | 42.0 s | 17.9 s | 10.4 s |
+| 80 food web replicates (15 species, to 1000 ESS each) | 54.4 s | 15.3 s | 10.4 s |
 | 4 billiard chains of 4000 steps, 200 dimensions | 5.3 s | 1.6 s | |
 
 Chains in one run gain little beyond the number of performance cores, as the slowest

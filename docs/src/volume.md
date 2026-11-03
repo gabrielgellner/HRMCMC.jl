@@ -26,7 +26,7 @@ v.log_volume, v.log_stderr, 50 * log(2)
 The estimate multiplies volume ratios (multiphase Monte Carlo with cooling balls, Chalkis,
 Emiris & Fisikopoulos 2023). In the rounded coordinates of the warmup, balls centered at the
 warmup center shrink from the whole polytope to a ball of which 10–15% lies inside it.
-Each body `K ∩ B(ρᵢ₊₁)` holds about an eighth of `K ∩ B(ρᵢ)`, so a 63-dimensional food web
+Each body `K ∩ B(ρᵢ₊₁)` holds about an eighth of `K ∩ B(ρᵢ)`, so a 65-dimensional food web
 polytope needs about 10 phases.
 
 - The share of the last ball inside the polytope comes from independent uniform points of
