@@ -32,6 +32,11 @@ and badly scaled polytopes need the default rounding: on a rotated box with side
 1e-3 to 1e3 without rounding, chains reached points 1e-6 from a facet where every
 integration failed, and stayed there.
 
+The preprocessing of volesti's CRHMC (`crhmc_problem.h`: rescaling, dependent rows, fixed
+and collapsed variables, repeated until nothing changes) is done by [`warmup`](@ref), whose
+coordinates CRHMC runs in. volesti also bounds infinite bounds at ±1e7 for the barrier;
+`warmup` rejects unbounded polytopes instead.
+
 A step whose implicit integration does not converge is rejected. As failures happen more
 often near the boundary, they bias the chain slightly toward the interior; the metric is
 refactored during slow integrations to keep them below about 0.1% of steps, where the bias
