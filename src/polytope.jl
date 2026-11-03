@@ -2,7 +2,8 @@
     Polytope(lower, upper; A, b, C, d)
 
 The convex polytope of points `x` with `lower .<= x .<= upper`, `A * x .<= b` and
-`C * x .== d`. Bounds may be infinite as long as the constraints bound the polytope. A
+`C * x .== d`. Bounds may be infinite as long as the constraints bound the polytope, except
+for a [`GaussianTarget`](@ref), which samples unbounded polyhedra too. A
 coordinate with `lower[i] == upper[i]` is fixed at that value.
 
 `A`, `b`, `C` and `d` default to no constraints and must be finite. Constraints of the form

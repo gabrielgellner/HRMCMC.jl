@@ -58,6 +58,7 @@ function volume(
     nchains >= 2 || throw(ArgumentError("nchains must be at least 2 for R̂, got $nchains"))
     n >= 10 || throw(ArgumentError("n must be at least 10 for R̂, got $n"))
     max_n >= n || throw(ArgumentError("max_n must be at least n"))
+    check_bounded(w, "volume")
     k = size(w.transform, 2)
     k == 0 && return (;
         volume = 1.0, log_volume = 0.0, log_stderr = 0.0, radii = Float64[], ratios = Float64[],

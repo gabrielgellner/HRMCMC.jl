@@ -203,13 +203,14 @@ end
 
 # The interval of `t` with `G (z + t g) ≤ h`, given the slacks `h - G z` and the rates
 # `g = G u`. Slacks are clamped at zero so that a point that rounding has put just outside a
-# constraint still gets an interval holding zero.
-function chord(slack, g)
+# constraint still gets an interval holding zero. With `bounded = false` (the warmup of a
+# Gaussian target on an unbounded polyhedron) an end may be infinite.
+function chord(slack, g, bounded::Bool = true)
     tmin, tmax = -Inf, Inf
     for i in eachindex(slack, g)
         tmin, tmax = narrow(tmin, tmax, g[i], max(slack[i], 0.0))
     end
-    isfinite(tmin) && isfinite(tmax) ||
+    bounded && !(isfinite(tmin) && isfinite(tmax)) &&
         throw(ArgumentError("the polytope is unbounded along a sampled direction"))
     return tmin, tmax
 end
@@ -272,7 +273,7 @@ function advance!(rng::AbstractRNG, c::HitAndRunState)
     if direction!(rng, c)
         refresh_slack!(c)
         mul!(c.Gu, w.G, c.u)
-        t = draw_on_chord(rng, c, chord(c.slack, c.Gu)..., c.u)
+        t = draw_on_chord(rng, c, chord(c.slack, c.Gu, c.warmup.bounded)..., c.u)
         for i in eachindex(c.z)
             c.z[i] += t * c.u[i]
         end
@@ -309,7 +310,7 @@ function advance!(rng::AbstractRNG, c::HitAndRunState{CoordinateHitAndRun})
             j = cyclic ? c.next_coordinate : rand(rng, 1:k)
             c.next_coordinate = j == k ? 1 : j + 1
             g = view(w.G, :, j)
-            t = draw_on_chord(rng, c, chord(c.slack, g)..., j)
+            t = draw_on_chord(rng, c, chord(c.slack, g, c.warmup.bounded)..., j)
             c.z[j] += t
             for i in eachindex(c.slack)
                 c.slack[i] -= t * g[i]
@@ -384,6 +385,7 @@ end
 # point is drawn again, up to START_TRIES times, until the density there is positive.
 function start_state(method::PolytopeSampler, model, rng::AbstractRNG)
     w = geometry(model)
+    check_unbounded_method(method, w)
     state = chain_state(method, model)
     k = length(state.z)
     if k > 0 && !isempty(w.h)
@@ -400,10 +402,19 @@ end
 
 const START_TRIES = 100
 
+# Only hit-and-run draws the truncated normal on an infinite chord; the other samplers need a
+# bounded polytope
+function check_unbounded_method(method, w::Warmup)
+    w.bounded || method isa AbstractHitAndRun ||
+        throw(ArgumentError("$method needs a bounded polytope; use HitAndRun or CoordinateHitAndRun for a Gaussian target on an unbounded polyhedron"))
+    return
+end
+
 # A chain state at `x`, a point of the polytope in its original coordinates. A feasible `x`
 # satisfies every equality that holds over the polytope, so it lies on `center + transform * z`.
 function start_state(method::PolytopeSampler, model, x::AbstractVector{<:Real})
     w = geometry(model)
+    check_unbounded_method(method, w)
     x in w.polytope || throw(ArgumentError("initial_params is outside the polytope"))
     state = chain_state(method, model)
     isempty(state.z) || (state.z .= w.transform \ (x .- w.center))

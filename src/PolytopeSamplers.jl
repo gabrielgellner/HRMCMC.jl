@@ -11,7 +11,7 @@ using JuMP: @constraint, @objective, @variable, DUAL_INFEASIBLE, INFEASIBLE,
     set_attribute, set_lower_bound, set_normalized_rhs, set_silent, set_time_limit_sec, set_upper_bound,
     solver_name,
     termination_status, time_limit_sec, value
-using LinearAlgebra: Diagonal, Hermitian, I, Symmetric, UpperTriangular, cholesky, cholesky!, diag, dot, eigen, eigvals, issuccess, ldiv!, lmul!, logdet, mul!, norm,
+using LinearAlgebra: Diagonal, Hermitian, I, Symmetric, UpperTriangular, cholesky, cholesky!, diag, dot, eigen, eigvals, isposdef, issuccess, ldiv!, lmul!, logdet, mul!, norm,
     ColumnNorm, normalize!, nullspace, pinv, qr, rank, svd, transpose!
 using Random: AbstractRNG, Xoshiro, default_rng, randexp, randn!
 using MCMCDiagnosticTools: ess_rhat, mcse

@@ -2,11 +2,11 @@ using PolytopeSamplers: PolytopeSamplers, ACHR, BilliardWalk, CRHMC, CoordinateH
     DikinWalk, ExponentialTarget, GaussianTarget, HitAndRun, MCMCSerial, Polytope, Target, VaidyaWalk,
     diagnostics, sample, sample_until_converged, warmup
 using AllocCheck: check_allocs
-using Distributions: Gamma, Normal, cdf, truncated
+using Distributions: Gamma, Normal, ccdf, cdf, pdf, truncated
 using JET: @test_opt
 using LogDensityProblems: LogDensityProblems, LogDensityOrder
 using Random: Xoshiro
-using LinearAlgebra: I
+using LinearAlgebra: Diagonal, I
 using Statistics: cor, mean, std
 
 const density_methods = (
@@ -317,5 +317,43 @@ end
         de, ds = exact.diagnostics, slice.diagnostics
         @test all(@. abs(de.mean - ds.mean) < 5 * sqrt(de.mcse_mean^2 + ds.mcse_mean^2))
         @test all(@. abs(de.std - ds.std) < 6 * sqrt(de.mcse_std^2 + ds.mcse_std^2))
+    end
+
+    # Exact moments of normals truncated to a half-line; 0 failures over 50 seeds for each
+    # polyhedron and sampler (#93)
+    @testset "Gaussian on an unbounded polyhedron ($m)" for m in (HitAndRun(), CoordinateHitAndRun())
+        # x₁ ≥ 1 for a standard normal: mean λ = φ(1)/(1 - Φ(1)), variance 1 + λ - λ²
+        t = GaussianTarget(Polytope([1.0, -Inf], [Inf, Inf]), [0.0, 0.0], [1.0 0.0; 0.0 1.0])
+        @test !t.warmup.bounded
+        λ = pdf(Normal(), 1) / ccdf(Normal(), 1)
+        r = sample_until_converged(Xoshiro(1), t, m)
+        @test r.converged
+        @test moments_match(r.diagnostics, [λ, 0.0], [sqrt(1 + λ - λ^2), 1.0])
+        # The orthant x ≥ 0 with x₃ = 0.5 fixed, for independent normals with σ = 1 and 2
+        t = GaussianTarget(Polytope(zeros(3), fill(Inf, 3); C = [0.0 0.0 1.0], d = [0.5]), zeros(3), Diagonal([1.0, 4.0, 1.0]))
+        r = sample_until_converged(Xoshiro(1), t, m)
+        d = r.diagnostics
+        @test r.converged
+        @test all(x -> x[3] == 0.5, eachcol(reduce(hcat, r.chains)))
+        @test moments_match((; mean = d.mean[1:2], std = d.std[1:2], mcse_mean = d.mcse_mean[1:2], mcse_std = d.mcse_std[1:2]), [1, 2] .* sqrt(2 / π), [1, 2] .* sqrt(1 - 2 / π))
+    end
+
+    @testset "unbounded polyhedra need a GaussianTarget and hit-and-run (#93)" begin
+        P = Polytope([1.0, -Inf], [Inf, Inf])
+        t = GaussianTarget(P, [0.0, 0.0], [1.0 0.0; 0.0 1.0])
+        @test occursin("unbounded", sprint(show, t.warmup))
+        for m in (BilliardWalk(), DikinWalk(), VaidyaWalk(), CRHMC())
+            @test_throws ArgumentError sample(Xoshiro(1), t, m, 10; progress = false)
+        end
+        @test_throws ArgumentError ExponentialTarget(t.warmup, ones(2))
+        @test_throws ArgumentError Target(t.warmup, x -> -sum(abs2, x))
+        @test_throws ArgumentError PolytopeSamplers.volume(t.warmup)
+        @test_throws ArgumentError PolytopeSamplers.ranges(t.warmup)
+        @test_throws ArgumentError GaussianTarget(P, [0.0, 0.0], [1.0 0.0; 0.0 1.0]; whiten = true)
+        @test_throws ArgumentError warmup(P)
+        @test_throws ArgumentError GaussianTarget(Polytope([1.0, -Inf], [0.0, Inf]), [0.0, 0.0], [1.0 0.0; 0.0 1.0])
+        # A bounded polytope with infinite bounds keeps the usual warmup
+        tb = GaussianTarget(Polytope(fill(-Inf, 2), fill(Inf, 2); A = [1.0 0.0; -1.0 0.0; 0.0 1.0; 0.0 -1.0], b = ones(4)), [0.0, 0.0], [1.0 0.0; 0.0 1.0])
+        @test tb.warmup.bounded
     end
 end
