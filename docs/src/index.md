@@ -42,7 +42,7 @@ r = sample_until_converged(Xoshiro(1), warmup(P); target_ess = 1_000)
 r.converged, r.n
 ```
 
-`sample_until_converged` runs four [`BilliardWalk`](@ref) chains, doubling their length,
+`sample_until_converged` runs four [`BilliardWalk`](@ref) chains, lengthening them,
 until every coordinate has an effective sample size of at least `target_ess` and R̂ below
 1.01. The estimates come with their Monte Carlo standard errors:
 

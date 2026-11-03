@@ -46,7 +46,7 @@ X = reduce(hcat, r.chains)            # one point per column
 
 `mmcs` is multiphase Monte Carlo sampling (Chalkis et al. 2021): a linear program finds
 the largest ball in the polytope, billiard-walk samples round it, and four billiard-walk
-chains run, doubling in length, until the smallest effective sample size reaches
+chains run, lengthening, until the smallest effective sample size reaches
 `target_ess` and R̂ is below 1.01. Rounding from samples avoids the dense `m × m`
 factorizations of ellipsoid rounding, but up to 2000 constraints it was the slower of the
 two (121 s against 10 s with 2000 constraints in 400 dimensions), so

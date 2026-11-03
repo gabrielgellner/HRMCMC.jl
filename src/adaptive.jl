@@ -1,22 +1,36 @@
 """
     sample_until_converged([rng], w::Warmup, method = BilliardWalk(); target_ess = 1000,
                            max_rhat = 1.01, nchains = 4, n = 1000, max_n = 1_000_000,
-                           thinning = 1)
+                           thinning = 1, multivariate = false)
     sample_until_converged([rng], t::Target, method = HitAndRun(); kwargs...)
 
 Run `nchains` chains, on the uniform distribution of a [`Warmup`](@ref) or the density of
-a [`Target`](@ref), and double their length until the second half of the chains has a
-smallest effective sample size of at least `target_ess` and a largest R̂ below `max_rhat`
-over the varying coordinates; the first half is discarded as burn-in (Gelman & Rubin
-1992). The first round keeps `n` points per chain; rounds stop once `max_n` points per
-chain are kept.
+a [`Target`](@ref), and lengthen them until the second half of the chains has a smallest
+effective sample size of at least `target_ess` and a largest R̂ below `max_rhat` over the
+varying coordinates; the first half is discarded as burn-in (Gelman & Rubin 1992). With
+`multivariate = true`, the multivariate R̂ of the chains (see [`diagnostics`](@ref)) must
+also be below `max_rhat`.
+
+The first round keeps `n` points per chain. Each later round sets the kept length from the
+effective samples per point of the last one, to 1.2 times the length that reaches
+`target_ess`, at most twice the last length (as volesti's `mmcs` extrapolates its run from
+the ESS), and doubles it while R̂ is too high. Rounds stop once `max_n` points per chain are
+kept, counted at the given `thinning`.
+
+Only the kept half of each chain is stored. When it holds more than 20 points per
+effective sample (200 while the chains have fewer than 20 effective samples each), every
+other point is dropped and later rounds keep every second step, as PolytopeSamplerMatlab
+thins its stored chain; the same happens when the stored points would exceed 4 GiB. Long
+runs of slowly mixing chains thus keep a few thousand points per chain, about as
+informative as all of them.
 
 Each chain starts at a random point of the largest ball around the warmup center inside
 the polytope and has its own random number generator, seeded from `rng`, so the result
 does not depend on the number of threads; chains run on separate threads when Julia has them.
 
 Returns a named tuple: `chains` (one matrix per chain, a point per column), `diagnostics`
-(see [`diagnostics`](@ref)), `n` (points kept per chain), `converged` and `fixed`, the
+(see [`diagnostics`](@ref)), `n` (points kept per chain), `thinning` (the steps between
+kept points, `thinning` times the automatic thinning), `converged` and `fixed`, the
 coordinates that do not vary on the slice. `converged` covers the varying coordinates only;
 `fixed` lists the others, which [`warmup`](@ref) holds at its center. A warning is logged
 when the chains have not converged by `max_n`.
@@ -25,6 +39,7 @@ function sample_until_converged(
         rng::AbstractRNG, model::Union{Warmup, Target}, method::PolytopeSampler = default_method(model);
         target_ess::Real = 1000, max_rhat::Real = 1.01, nchains::Integer = 4,
         n::Integer = 1000, max_n::Integer = 1_000_000, thinning::Integer = 1,
+        multivariate::Bool = false,
     )
     nchains >= 2 || throw(ArgumentError("nchains must be at least 2 for R̂, got $nchains"))
     n >= 4 || throw(ArgumentError("n must be at least 4, got $n"))
@@ -32,21 +47,47 @@ function sample_until_converged(
     thinning >= 1 || throw(ArgumentError("thinning must be positive, got $thinning"))
     rngs = [Xoshiro(rand(rng, UInt64)) for _ in 1:nchains]
     states = [start_state(method, model, rngs[j]) for j in 1:nchains]
-    draws = [zeros(nvars(geometry(model).polytope), 0) for _ in 1:nchains]
-    kept = n
+    nv = nvars(geometry(model).polytope)
+    # The chains have run `total` records of `rec * thinning` steps each, of which the
+    # records `head:total` are stored; a round runs to `2kept` records and keeps the last
+    # `kept`
+    draws = [zeros(nv, 0) for _ in 1:nchains]
+    total, head, rec, kept = 0, 1, 1, n
     while true
-        total = 2kept
         Threads.@threads for j in 1:nchains
-            draws[j] = hcat(draws[j], run_chain!(rngs[j], states[j], total - size(draws[j], 2), thinning))
+            draws[j] = extend_chain(rngs[j], states[j], draws[j], head, total, kept, rec * thinning)
         end
-        chains = [X[:, (kept + 1):end] for X in draws]
-        d = diagnostics(chains)
-        converged = all(isnan, d.ess) || (d.min_ess >= target_ess && d.max_rhat < max_rhat)
-        if converged || kept >= max_n
-            converged || @warn "chains have not converged after $kept points per chain" d.min_ess d.max_rhat
-            return (; chains, diagnostics = d, n = kept, converged, fixed = fixed_coordinates(geometry(model)))
+        total, head = 2kept, kept + 1
+        d = diagnostics(draws; multivariate)
+        mixed = d.max_rhat < max_rhat && (!multivariate || d.multivariate_rhat < max_rhat)
+        converged = all(isnan, d.ess) || (d.min_ess >= target_ess && mixed)
+        result = (;
+            chains = draws, diagnostics = d, n = kept, thinning = rec * thinning, converged,
+            fixed = fixed_coordinates(geometry(model)),
+        )
+        done = converged || kept * rec >= max_n
+        if !done
+            # Halve the stored records while there are too many per effective sample
+            # (PolytopeSamplerMatlab's MemoryStorage.m); `next` is the length that reaches
+            # `target_ess`, before the factor of 1.2
+            per_ess = kept * nchains / d.min_ess
+            limit = d.min_ess < 20nchains ? 200 : 20
+            next = mixed ? kept * target_ess / d.min_ess : 2kept
+            while iseven(total) && per_ess > 2 &&
+                    (per_ess > limit || 8 * nv * nchains * 1.2next > STORED_BYTES)
+                draws = [X[:, (iseven(head) ? 1 : 2):2:end] for X in draws]
+                total, head, rec = total ÷ 2, cld(head, 2), 2rec
+                per_ess, next = per_ess / 2, next / 2
+            end
+            half = total ÷ 2
+            kept = clamp(ceil(Int, 1.2next), half + 1, 2half)
+            kept = min(kept, max_n ÷ rec, STORED_BYTES ÷ (8 * nv * nchains))
+            done = kept <= half
         end
-        kept = min(2kept, max_n)
+        if done
+            converged || @warn "chains have not converged after $(result.n) points per chain" d.min_ess d.max_rhat
+            return result
+        end
     end
     return
 end
@@ -60,17 +101,25 @@ end
 default_method(::Warmup) = BilliardWalk()
 default_method(::Target) = HitAndRun()
 
-# `count` more points of a chain, keeping every `thinning`-th step
-function run_chain!(rng, state, count, thinning)
-    X = Matrix{Float64}(undef, length(state.x), count)
-    for j in 1:count
-        for _ in 1:thinning
-            step!(rng, state)
+# Stored points of the chains of `sample_until_converged`, 4 GiB in all
+const STORED_BYTES = 2^32
+
+# The records `kept + 1:2kept` of a chain whose records `head:total`, of `steps` steps each,
+# are the columns of `X`
+function extend_chain(rng, state, X, head, total, kept, steps)
+    Y = Matrix{Float64}(undef, size(X, 1), kept)
+    old = max(total - kept, 0) # stored records past the new burn-in
+    copyto!(Y, 1, X, (kept - head + 1) * size(X, 1) + 1, old * size(X, 1))
+    for i in (total + 1):(2kept)
+        # the steps between records skip computing `x`, as `sample` does when thinning
+        for _ in 2:steps
+            advance!(rng, state)
         end
-        X[:, j] = state.x
+        step!(rng, state)
+        i > kept && (Y[:, i - kept] = state.x)
     end
     check_state(state)
-    return X
+    return Y
 end
 
 """

@@ -1,4 +1,4 @@
-using PolytopeSamplers: HitAndRun, MCMCSerial, Polytope, diagnostics, sample, warmup
+using PolytopeSamplers: PolytopeSamplers, HitAndRun, MCMCSerial, Polytope, diagnostics, sample, warmup
 using Random: Xoshiro
 using Statistics: mean
 
@@ -51,6 +51,40 @@ using Statistics: mean
         @test d.min_ess == minimum(d.ess[[1, 3]])
         @test d.max_rhat < 1.05
         @test isnan(diagnostics(fill(0.5, 2, 10)).min_ess)
+    end
+
+    @testset "multivariate R̂ (#53)" begin
+        # Wide along (1, 1) and narrow along (1, -1), with two chains shifted by 5 standard
+        # deviations of the narrow direction: every coordinate agrees, the combination
+        # x₁ - x₂ does not
+        chains = map(1:4) do seed
+            rng = Xoshiro(seed)
+            u, v = 10 .* randn(rng, 1000), 0.1 .* randn(rng, 1000) .+ (seed > 2 ? 0.5 : 0.0)
+            permutedims(hcat(u .+ v, u .- v)) ./ sqrt(2)
+        end
+        d = diagnostics(chains; multivariate = true)
+        @test d.max_rhat < 1.01
+        @test d.multivariate_rhat > 5
+        @test isnan(diagnostics(chains).multivariate_rhat)
+        # Points on the slice x₁ + x₂ = 1 with a constant coordinate have a singular
+        # covariance
+        slice = map(1:4) do seed
+            u = rand(Xoshiro(seed), 1, 1000)
+            vcat(u, 1 .- u, fill(0.5, 1, 1000))
+        end
+        @test 1 <= diagnostics(slice; multivariate = true).multivariate_rhat < 1.01
+        @test 1 <= diagnostics([rand(Xoshiro(seed), 3, 1000) for seed in 1:4]; multivariate = true).multivariate_rhat < 1.01
+    end
+
+    @testset "coordinates in blocks" begin
+        # 1100 coordinates of 4 chains of 1000 points span two blocks of DIAGNOSTICS_BLOCK
+        chains = [rand(Xoshiro(seed), 1100, 1000) for seed in 1:4]
+        d = diagnostics(chains)
+        @test 1100 * 4000 > PolytopeSamplers.DIAGNOSTICS_BLOCK
+        for i in (1, 1048, 1049, 1100)
+            di = diagnostics([X[i:i, :] for X in chains])
+            @test d.ess[i] ≈ only(di.ess) && d.rhat[i] ≈ only(di.rhat) && d.mcse_std[i] ≈ only(di.mcse_std)
+        end
     end
 
     @testset "argument checks" begin
