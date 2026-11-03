@@ -219,10 +219,12 @@ function normalize_rows!(G, h)
 end
 
 """
-    round_polytope!(center, T, G, h; optimizer, maxiter = 20, max_ratio = 6)
+    round_polytope!(center, T, G, h; optimizer, maxiter = 20, max_ratio = 6,
+                    ellipsoid = :max_volume)
 
 Round the polytope `x = center + T z, G z ≤ h` in place by repeated maximum-volume
-ellipsoids. Each round maps the ellipsoid to the unit ball and starts from the center of the
+ellipsoids, or with `ellipsoid = :barrier` by the Dikin ellipsoid of the log barrier at its
+analytic center (see [`barrier_ellipsoid`](@ref PolytopeSamplers.barrier_ellipsoid)). Each round maps the ellipsoid to the unit ball and starts from the center of the
 last one, or from the Chebyshev center in the first round and when that center lies within
 `1e-3` of a facet; rounding stops when the ellipsoid's squared axis ratio is at most `max_ratio` (the
 criterion of volesti), its solver has converged and its starting slacks needed no raise
@@ -240,7 +242,10 @@ converge in 500 iterations (60 s against 11 s). PolyRound also starts every roun
 Chebyshev center; a program of the dense rounded constraints took 5 to 7 s on web50, and
 starting from the last ellipsoid's center instead rounded it in 14 s instead of 33 s.
 """
-function round_polytope!(center, T, G, h; optimizer, maxiter::Integer = 20, max_ratio::Real = 6)
+function round_polytope!(
+        center, T, G, h; optimizer, maxiter::Integer = 20, max_ratio::Real = 6,
+        ellipsoid::Symbol = :max_volume,
+    )
     k = size(G, 2)
     k == 0 && return center, T, G, h
     ratio = Inf # squared axis ratio of the last ellipsoid mapped to the ball
@@ -258,7 +263,8 @@ function round_polytope!(center, T, G, h; optimizer, maxiter::Integer = 20, max_
         # Powers of 10 computed exactly, so that the test `reg > 1e-6` in the ellipsoid solver
         # does not see 1.0000000000000002e-6
         reg = exp10(-min(round + 3, 10))
-        E2, c, converged, distortion, failed = max_volume_ellipsoid(G, h, zeros(k); reg)
+        E2, c, converged, distortion, failed = ellipsoid === :barrier ?
+            (barrier_ellipsoid(G, h)..., 0.0, false) : max_volume_ellipsoid(G, h, zeros(k); reg)
         λ = eigvals(Symmetric(E2))
         # A singular E2 has no inverse to factor
         F = !failed && λ[1] > 0 ? cholesky(nearest_spd(inv(Symmetric(E2))); check = false) : nothing
@@ -284,6 +290,59 @@ function round_polytope!(center, T, G, h; optimizer, maxiter::Integer = 20, max_
         shift!(center, T, G, h, c)
     end
     return center, T, G, h
+end
+
+"""
+    barrier_ellipsoid(G, h; maxiter = 500, grad_tol = 1e-8, rel_tol = 1e-12)
+
+The analytic center `c` of `{z : G z ≤ h}`, the minimizer of the log barrier
+`-Σ log(hᵢ - Gᵢ z)`, and the barrier's Hessian `H = Gᵀ S⁻² G` there, by damped Newton steps
+from `z = 0`, which must be inside. Returns `(H, c, converged)`. The Dikin ellipsoid
+`{z : (z - c)ᵀ H (z - c) ≤ 1}` lies in the polytope, and the polytope lies in the ellipsoid
+scaled by `m`, the number of rows, against `k` for the maximum-volume ellipsoid. A Newton step
+solves one `k × k` system, where a step of the maximum-volume ellipsoid works with `m × m`
+matrices. Both the center and `H` move with an affine change of coordinates, so after the
+ellipsoid is mapped to the unit ball the Hessian at the new center is the identity, and one
+round of `round_polytope!` rounds as far as this ellipsoid can.
+
+Adapted from volesti, include/preprocess/barrier_center_ellipsoid.hpp and
+rounding_util_functions.hpp (commit 064e18c, LGPL-3.0; Copyright (c) 2024 Vissarion
+Fisikopoulos, Apostolos Chalkis, Elias Tsigaridas): the full Newton step capped at 0.99 of
+the distance to the boundary, and the stopping rules on the gradient norm and the relative
+change of the point, with their tolerances and iteration limit.
+"""
+function barrier_ellipsoid(G, h; maxiter::Integer = 500, grad_tol::Real = 1.0e-8, rel_tol::Real = 1.0e-12)
+    m, k = size(G)
+    z = zeros(k)
+    s = copy(h)
+    all(>(0), s) || throw(ArgumentError("the starting point is not inside the polytope"))
+    H = Matrix{Float64}(undef, k, k)
+    grad = zeros(k)
+    Gd = zeros(m)
+    B = similar(G)
+    function hessian_grad!()
+        B .= G ./ s
+        mul!(H, B', B)
+        mul!(grad, G', 1 ./ s)
+        return H
+    end
+    hessian_grad!()
+    for _ in 1:maxiter
+        F = cholesky(Symmetric(H); check = false)
+        issuccess(F) || return H, z, false
+        d = -(F \ grad)
+        mul!(Gd, G, d)
+        # The largest step that keeps every slack positive is 1 / max(Gd ./ s)
+        reach = maximum(i -> Gd[i] / s[i], eachindex(s))
+        t = reach > 0 ? min(0.99 / reach, 1.0) : 1.0
+        rel = maximum(i -> abs(t * d[i]) / abs(z[i]), eachindex(z))
+        z .+= t .* d
+        mul!(s, G, z)
+        s .= h .- s
+        hessian_grad!()
+        (norm(grad) <= grad_tol || rel <= rel_tol) && return H, z, true
+    end
+    return H, z, false
 end
 
 # Move the origin of the `z` coordinates to `c`
