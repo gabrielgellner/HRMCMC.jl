@@ -31,7 +31,10 @@ use is sampling the interaction strengths of food webs consistent with an equili
 - `src/density.jl`: `Target` (a warmup with a log density, LogDensityProblems or a
   function), its evaluation in `z`, slice sampling on a chord, and `GaussianTarget` and
   `ExponentialTarget`, whose quadratic log densities hit-and-run draws exactly on a chord
-  (truncated normal and exponential samplers of Robert 1995). States carry the density
+  (truncated normal and exponential samplers of Robert 1995). `GaussianTarget` also takes
+  unbounded polyhedra: its warmup comes from the polyhedron cut by a box around the
+  Gaussian's mode, has `bounded = false`, and only hit-and-run samples it, on chords that
+  may be infinite. States carry the density
   as a type parameter, `nothing` for the uniform distribution, so the uniform steps keep no
   density code and stay allocation free.
 - `src/sampler.jl`: `PolytopeSampler`, `HitAndRun`, `ACHR`, `CoordinateHitAndRun` (slack

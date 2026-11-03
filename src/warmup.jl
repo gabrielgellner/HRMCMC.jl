@@ -29,6 +29,8 @@ direction in which the polytope has width and the rows of `G` have unit norm.
 - `radius`: the radius of the largest ball in `{z : G z ≤ h}`, near 1 when rounded.
 - `rounded`: whether `transform` rounds the polytope.
 - `removed`: the number of redundant bounds and inequalities left out of `G` and `h`.
+- `bounded`: `false` for the warmup of a [`GaussianTarget`](@ref) on an unbounded
+  polyhedron, whose chords may be infinite.
 
 With `warmup(P; extremes = false)` (the default), `points` and `zpoints` have no columns;
 [`ACHR`](@ref) computes the extreme points when a chain first needs them.
@@ -44,17 +46,24 @@ struct Warmup <: AbstractModel
     radius::Float64
     rounded::Bool
     removed::Int
+    bounded::Bool
     cache::WarmupCache
 end
 
 function Warmup(
         P, points, center, transform, G, h, zpoints, radius, rounded;
-        removed::Integer = 0, optimizer = HiGHS.Optimizer,
+        removed::Integer = 0, optimizer = HiGHS.Optimizer, bounded::Bool = true,
     )
     return Warmup(
-        P, points, center, transform, G, h, zpoints, radius, rounded, removed,
+        P, points, center, transform, G, h, zpoints, radius, rounded, removed, bounded,
         WarmupCache(nothing, nothing, nothing, nothing, optimizer, ReentrantLock()),
     )
+end
+
+# Throw unless the polytope of `w` is bounded, for the operations that need it
+function check_bounded(w::Warmup, what)
+    w.bounded || throw(ArgumentError("$what needs a bounded polytope; this warmup is of a Gaussian target on an unbounded polyhedron"))
+    return w
 end
 
 # Gᵀ and G Gᵀ, computed once per warmup, so that chains on separate threads share one copy
@@ -167,7 +176,7 @@ julia> upper
 ```
 """
 ranges(P::Polytope; optimizer = HiGHS.Optimizer) = point_ranges(coordinate_extremes(P, optimizer))
-ranges(w::Warmup) = point_ranges(extreme_points(w))
+ranges(w::Warmup) = point_ranges(extreme_points(check_bounded(w, "ranges")))
 
 point_ranges(points) = (vec(minimum(points; dims = 2)), vec(maximum(points; dims = 2)))
 
@@ -178,6 +187,7 @@ fixed_coordinates(w::Warmup) = findall(i -> all(iszero, view(w.transform, i, :))
 function Base.show(io::IO, w::Warmup)
     print(io, "Warmup on a ", size(w.transform, 2), "-dimensional slice of a ")
     print(io, nvars(w.polytope), "-variable polytope")
+    w.bounded || print(io, ", unbounded")
     w.rounded && print(io, ", rounded")
     fixed = length(fixed_coordinates(w))
     fixed > 0 && print(io, ", ", fixed, fixed == 1 ? " fixed coordinate" : " fixed coordinates")
