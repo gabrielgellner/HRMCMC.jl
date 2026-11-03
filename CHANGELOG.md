@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0] - 2026-11-03
+
+### Bug Fixes
+
+- **rounding**: Repair ellipsoid matrices by the symmetric eigendecomposition, as the SVD failed with multithreaded BLAS (#115)
+
+### Documentation
+
+- **examples**: Build the food web examples without FoodWebs.jl
+
+### Features
+
+- **diagnostics**: Compare the multivariate R̂ with its value for independent draws of the same dimension (#104)
+
 ## [0.6.0] - 2026-11-03
 
 ### Documentation
