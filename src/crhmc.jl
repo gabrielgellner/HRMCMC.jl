@@ -38,9 +38,22 @@ coordinates CRHMC runs in. volesti also bounds infinite bounds at ±1e7 for the 
 `warmup` rejects unbounded polytopes instead.
 
 A step whose implicit integration does not converge is rejected. As failures happen more
-often near the boundary, they bias the chain slightly toward the interior; the metric is
-refactored during slow integrations to keep them below about 0.1% of steps, where the bias
-was not detectable over 20 seeds.
+often near the boundary, they could bias the chain toward the interior; the metric is
+refactored during slow integrations to keep them rare. They were 0.2% of steps on a
+20-dimensional cube, 0.9% on a 50-dimensional simplex and 4% on a food web with 257
+dimensions, where the means and standard deviations of all 282 coordinates still agreed
+with coordinate hit-and-run (root mean square z-scores 0.95 and 1.07, none above 3).
+
+The barrier has unit weights. PolytopeSamplerMatlab weights each constraint, starting from
+Lewis weights, so that many constraints do not shrink the steps; here 4000 random
+constraints at distance 6 around the cube `[-1, 1]³⁰` lowered the smallest ESS of 4 chains of
+4000 steps only from 566 to 427, as distant constraints add little to the barrier, and
+[`warmup`](@ref) removes redundant ones.
+
+PolytopeSamplerMatlab also adds the Hessian of the log density to the metric. For a
+[`GaussianTarget`](@ref) that is the constant `Tᵀ Q T`; it raised the effective samples per
+second 4.2 times for a Gaussian with correlation 0.99 in a box and lowered them 3.5 times
+for an isotropic one with `σ = 0.05`, so the metric here is the barrier's alone.
 
 Kook, Y., Lee, Y. T., Shen, R. & Vempala, S. S. (2022). Sampling with Riemannian Hamiltonian
 Monte Carlo in a constrained space. Advances in Neural Information Processing Systems 35.
@@ -77,7 +90,12 @@ const CRHMC_SHRINK = 1.1
 const CRHMC_MIN_STEP = 1.0e-3
 # Iterations of the implicit midpoint rule between refactorizations of the metric
 const CRHMC_REFACTOR = 5
-# Ridge added to the metric, as the reference adds 1e-20 to its Hessian
+# Ridge added to the metric, as the reference adds 1e-20 to its Hessian. The metric is
+# factored from `Bᵀ B`, which squares the condition number of `B = S⁻¹ G`;
+# PolytopeSamplerMatlab redoes an inaccurate factorization in double-double. On a rotated box
+# with sides from 1e-3 to 1e3 without rounding, 28% of factors had a squared diagonal ratio
+# above 1e10 and 3 of 20 000 failed; with the default rounding none did, so a failure
+# rejects the step.
 const CRHMC_RIDGE = 1.0e-20
 
 mutable struct CRHMCState{D}
@@ -283,6 +301,13 @@ end
 # `w ← w + g(z)⁻¹ (pmid - g(zmid) w)`, so an iteration costs O(mk + k²) instead of a
 # factorization; every `CRHMC_REFACTOR` iterations the factor is renewed at the midpoint. Returns the number of iterations, or 0 when the iteration fails to
 # converge or leaves the polytope.
+#
+# The reference tests only the final point and iterates through midpoints outside the
+# polytope, where the barrier's formulas still hold. Doing so here moved the failures of the
+# steps that left the polytope to divergence or the iteration limit, and the number of failed
+# steps stayed the same (37 against 37 of 20 000 on a cube, 331 against 327 of 8000 on a food
+# web), so a midpoint outside ends the step. Refactoring whenever an update fails to halve
+# took 1 to 4 factorizations per step without fewer failures.
 function implicit_midpoint!(c::CRHMCState, h)
     # The gradient at the end of an accepted step is the one needed at the start of the next
     if c.z == c.dU_z
