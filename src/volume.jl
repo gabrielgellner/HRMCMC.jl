@@ -1,6 +1,6 @@
 """
-    volume([rng], P::Polytope; error = 0.1, nchains = 4, n = 1000, max_n = 1_000_000, kwargs...)
-    volume([rng], w::Warmup; error = 0.1, nchains = 4, n = 1000, max_n = 1_000_000)
+    volume([rng], P::Polytope; error = 0.1, nchains = 4, n = 500, max_n = 1_000_000, kwargs...)
+    volume([rng], w::Warmup; error = 0.1, nchains = 4, n = 500, max_n = 1_000_000)
 
 Estimate the volume of a polytope by multiphase Monte Carlo with cooling balls (Chalkis,
 Emiris & Fisikopoulos 2023). Given a [`Polytope`](@ref), the other keyword arguments go to
@@ -12,9 +12,14 @@ centered at `z = 0`, chosen so that each body `K ∩ B(ρᵢ₊₁)` holds about
 volume of `K ∩ B(ρᵢ)`, down to a last ball of which 10–15% lies in `K`. The volume is the
 product of the volume of the last ball, the share of it inside `K`, estimated from
 independent uniform points of the ball, and the ratios `vol(K ∩ B(ρᵢ)) / vol(K ∩ B(ρᵢ₊₁))`,
-each estimated from `nchains` coordinate hit-and-run chains on `K ∩ B(ρᵢ)`. Each chain
-doubles its length, keeping the second half, until R̂ of the distance from the center is
-below 1.01 and the Monte Carlo standard error of the ratio is small enough for `error`.
+each estimated from `nchains` coordinate hit-and-run chains on `K ∩ B(ρᵢ)`, continued from
+the chains that chose the radius `ρᵢ₊₁`. A ratio is the share of the chains' states inside
+the next ball after each coordinate move. The chains lengthen, from `n` sweeps and keeping
+the second half, until R̂ of the distance from the center is below 1.01 and the Monte Carlo
+standard error of the ratio is small enough for `error`; each round extrapolates the length
+from the last one's standard error, at most doubling it. The variance `error²` of the log
+volume is split as in volesti: `error² / 4L` for the share of the last ball, whose
+independent points are cheap, and the rest equally over the `L - 1` ratios from chains.
 
 Returns a named tuple:
 
@@ -45,7 +50,7 @@ v.volume, v.log_stderr  # about 1
 ```
 """
 function volume(
-        rng::AbstractRNG, w::Warmup; error::Real = 0.1, nchains::Integer = 4, n::Integer = 1000,
+        rng::AbstractRNG, w::Warmup; error::Real = 0.1, nchains::Integer = 4, n::Integer = 500,
         max_n::Integer = 1_000_000,
     )
     error > 0 || throw(ArgumentError("error must be positive, got $error"))
@@ -60,22 +65,27 @@ function volume(
     r_in = minimum(w.h) # the largest ball centered at z = 0 inside the polytope
     r_in > 0 || throw(ArgumentError("the warmup center is not inside the polytope"))
     ρ_last = last_ball_radius(rng, w, r_in)
-    radii = ball_schedule(rng, w, r_in, ρ_last, nchains)
-    # Split the variance of the log volume equally over the phases
-    target = error / sqrt(length(radii))
+    radii, pilots = ball_schedule(rng, w, r_in, ρ_last, nchains)
+    # Adapted from volesti, include/volume/volume_cooling_balls.hpp (commit 064e18c,
+    # LGPL-3.0; Copyright (c) 2012-2020 Vissarion Fisikopoulos, 2018-2020 Apostolos
+    # Chalkis): of the variance error² of the log volume, the share of the last ball, from
+    # cheap independent points, gets error²/4L and the L - 1 chain phases split the rest
+    L = length(radii)
+    ball_target = error / (2 * sqrt(L))
+    target = error * sqrt((4L - 1) / (4L * (L - 1)))
     log_volume = 0.5 * logdet(Symmetric(w.transform' * w.transform)) + log_ball_volume(k, ρ_last)
     variance = 0.0
     ratios = Float64[]
     converged = true
     for i in 1:(length(radii) - 1)
-        r, se, ok = body_ratio(rng, w, radii[i], radii[i + 1], r_in; target, nchains, n, max_n)
+        r, se, ok = body_ratio(pilots[i], radii[i + 1]; target, n, max_n)
         r > 0 || throw(ErrorException("volume: no point of phase $i fell in the next ball after $max_n points per chain; raise max_n"))
         push!(ratios, r)
         log_volume -= log(r)
         variance += (se / r)^2
         converged &= ok
     end
-    f, se = ball_share(rng, w, ρ_last, target)
+    f, se = ball_share(rng, w, ρ_last, ball_target)
     push!(ratios, f)
     log_volume += log(f)
     variance += (se / f)^2
@@ -84,7 +94,7 @@ function volume(
     return (; volume = exp(log_volume), log_volume, log_stderr, radii, ratios, converged, warmup = w)
 end
 
-function volume(rng::AbstractRNG, P::Polytope; error::Real = 0.1, nchains::Integer = 4, n::Integer = 1000, max_n::Integer = 1_000_000, kwargs...)
+function volume(rng::AbstractRNG, P::Polytope; error::Real = 0.1, nchains::Integer = 4, n::Integer = 500, max_n::Integer = 1_000_000, kwargs...)
     return volume(rng, warmup(rng, P; kwargs...); error, nchains, n, max_n)
 end
 
@@ -110,13 +120,25 @@ function ball_point!(rng, z, ρ)
     return z
 end
 
-inside(w::Warmup, z) = all(i -> dot(view(w.G, i, :), z) <= w.h[i], eachindex(w.h))
+# The number of `points` uniform points of the ball of radius ρ that lie in the polytope,
+# tested BALL_BATCH at a time with one product G Z, which reads G by columns
+function ball_hits(rng, w, ρ, points)
+    Z = Matrix{Float64}(undef, size(w.G, 2), BALL_BATCH)
+    Y = Matrix{Float64}(undef, size(w.G, 1), BALL_BATCH)
+    hits = 0
+    for first in 1:BALL_BATCH:points
+        b = min(BALL_BATCH, points - first + 1)
+        foreach(z -> ball_point!(rng, z, ρ), eachcol(view(Z, :, 1:b)))
+        mul!(view(Y, :, 1:b), w.G, view(Z, :, 1:b))
+        hits += count(j -> all(i -> Y[i, j] <= w.h[i], axes(Y, 1)), 1:b)
+    end
+    return hits
+end
+
+const BALL_BATCH = 256
 
 # The share of `points` uniform points of the ball of radius ρ that lie in the polytope
-function ball_share_sample(rng, w, ρ, points)
-    z = zeros(size(w.G, 2))
-    return count(_ -> inside(w, ball_point!(rng, z, ρ)), 1:points) / points
-end
+ball_share_sample(rng, w, ρ, points) = ball_hits(rng, w, ρ, points) / points
 
 # Adapted from volesti, include/volume/volume_cooling_balls.hpp (commit 064e18c, LGPL-3.0;
 # Copyright (c) 2012-2020 Vissarion Fisikopoulos, 2018-2020 Apostolos Chalkis): the share
@@ -151,10 +173,9 @@ end
 # The share of the ball of radius ρ inside the polytope from independent uniform points,
 # with relative standard error at most `target`, and its standard error
 function ball_share(rng, w, ρ, target)
-    z = zeros(size(w.G, 2))
     hits, total, batch = 0, 0, BALL_PILOT
     while true
-        hits += count(_ -> inside(w, ball_point!(rng, z, ρ)), 1:batch)
+        hits += ball_hits(rng, w, ρ, batch)
         total += batch
         f = hits / total
         se = sqrt(f * (1 - f) / total)
@@ -171,24 +192,28 @@ end
 # The radii of the balls, from Inf to `ρ_last`: from BALL_PILOT points of each body
 # `K ∩ B(ρᵢ)`, the next radius keeps a share of 1/8 of them, unless at least BALL_SHARE_LOW of
 # them already lie in the last ball (volesti's `get_sequence_of_polytopeballs`, with the
-# radius from a quantile of the distances in place of its bisection)
+# radius from a quantile of the distances in place of its bisection). Also returns the
+# pilot chains of each body `K ∩ B(ρᵢ)` before the last ball, which `body_ratio` continues,
+# as volesti carries its walk's state from one phase to the next.
 function ball_schedule(rng, w, r_in, ρ_last, nchains)
     radii = [Inf]
+    pilots = Vector{BallChain}[]
     for _ in 1:1000
-        d = pilot_distances(rng, w, last(radii), r_in, nchains)
+        chains, d = pilot_distances(rng, w, last(radii), r_in, nchains)
+        push!(pilots, chains)
         if mean(<=(ρ_last), d) >= BALL_SHARE_LOW
             push!(radii, ρ_last)
-            return radii
+            return radii, pilots
         end
         ρ = max(quantile(d, 1 / 8), ρ_last)
         push!(radii, ρ)
-        ρ == ρ_last && return radii
+        ρ == ρ_last && return radii, pilots
     end
     throw(ErrorException("volume: no ball schedule after 1000 phases"))
 end
 
-# Distances from the center of BALL_PILOT points of `K ∩ B(ρ)`, from `nchains` chains after a
-# burn-in of 100 sweeps
+# `nchains` chains on `K ∩ B(ρ)` and the distances from the center of BALL_PILOT of their
+# points, after a burn-in of 100 sweeps
 function pilot_distances(rng, w, ρ, r_in, nchains)
     per_chain = cld(BALL_PILOT, nchains)
     chains = [BallChain(Xoshiro(rand(rng, UInt64)), w, ρ, r_in) for _ in 1:nchains]
@@ -203,36 +228,42 @@ function pilot_distances(rng, w, ρ, r_in, nchains)
             d[i, j] = sqrt(c.norm2)
         end
     end
-    return vec(d)
+    return chains, vec(d)
 end
 
-# The share of `K ∩ B(ρ)` inside `B(ρ_next)`, from `nchains` chains doubled until R̂ of the
-# distance from the center is below 1.01 and the relative Monte Carlo standard error of the
-# share is at most `target`; returns the share, its standard error and whether it converged
-function body_ratio(rng, w, ρ, ρ_next, r_in; target, nchains, n, max_n)
-    chains = [BallChain(Xoshiro(rand(rng, UInt64)), w, ρ, r_in) for _ in 1:nchains]
+# The share of `K ∩ B(ρ)` inside `B(ρ_next)`, from `chains` on `K ∩ B(ρ)` lengthened until R̂
+# of the distance from the center is below 1.01 and the relative Monte Carlo standard error of
+# the share is at most `target`; returns the share, its standard error and whether it converged
+function body_ratio(chains, ρ_next; target, n, max_n)
+    nchains = length(chains)
     d = [Float64[] for _ in 1:nchains]
+    f = [Float64[] for _ in 1:nchains]
     kept = n
     while true
         Threads.@threads for j in 1:nchains
             c = chains[j]
             for _ in (length(d[j]) + 1):(2kept)
-                sweep!(c)
+                inside = sweep!(c, ρ_next^2)
                 push!(d[j], sqrt(c.norm2))
+                push!(f[j], inside / length(c.z))
             end
         end
         x = Array{Float64}(undef, kept, nchains, 1)
+        inner = Array{Float64}(undef, kept, nchains, 1)
         for j in 1:nchains
             x[:, j, 1] = view(d[j], (kept + 1):(2kept))
+            inner[:, j, 1] = view(f[j], (kept + 1):(2kept))
         end
-        inner = Float64.(x .<= ρ_next)
         r = mean(inner)
         # every point inside the next ball gives a ratio of 1 with no error
         se = r == 1 ? 0.0 : r > 0 ? only(mcse(inner; kind = mean)) : Inf
         rhat = only(ess_rhat(x).rhat)
         ok = r > 0 && rhat < 1.01 && se <= target * r
         (ok || kept >= max_n) && return r, se, ok
-        kept = min(2kept, max_n)
+        # The standard error falls as 1/√kept: 1.2 times the length that reaches the target,
+        # at most twice this one, or twice while R̂ is too high or no point is inside
+        grow = rhat < 1.01 && r > 0 ? 1.2 * (se / (target * r))^2 : 2.0
+        kept = min(clamp(ceil(Int, grow * kept), kept + 1, 2kept), max_n)
     end
     return
 end
@@ -264,7 +295,7 @@ function ball_chord(tmin, tmax, zj, norm2, radius2)
     return min(max(tmin, -zj - s), 0.0), max(min(tmax, -zj + s), 0.0)
 end
 
-function sweep!(c::BallChain)
+function sweep!(c::BallChain, inner2 = -Inf)
     w = c.warmup
     z = c.z
     if c.sweeps % SLACK_REFRESH == 0
@@ -273,6 +304,7 @@ function sweep!(c::BallChain)
     end
     c.sweeps += 1
     c.norm2 = sum(abs2, z)
+    inside = 0
     for j in eachindex(z)
         g = view(w.G, :, j)
         tmin, tmax = ball_chord(chord(c.slack, g)..., z[j], c.norm2, c.radius2)
@@ -282,6 +314,7 @@ function sweep!(c::BallChain)
         for i in eachindex(c.slack)
             c.slack[i] -= t * g[i]
         end
+        inside += c.norm2 <= inner2
     end
-    return c
+    return inside
 end

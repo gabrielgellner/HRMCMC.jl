@@ -334,11 +334,12 @@ simplex_std(n) = sqrt((n - 1) / (n^2 * (n + 1)))
     end
 
     @testset "volume error bars cover the exact volume" begin
-        # z-scores of the log volume over 50 seeds, on polytopes needing two to four phases
+        # z-scores of the log volume over 50 seeds, on polytopes needing two to ten phases
         for (P, exact) in [
                 (Polytope(zeros(40), ones(40)), 0.0),
                 (Polytope(zeros(20), ones(20); A = ones(1, 20), b = [1.0]), -sum(log, 1:20)),
                 (Polytope(zeros(15), ones(15); C = ones(1, 15), d = [1.0]), log(15) / 2 - sum(log, 1:14)),
+                (Polytope(zeros(60), ones(60); A = ones(1, 60), b = [1.0]), -sum(log, 1:60)),
             ]
             w = warmup(P)
             z = [(v = volume(Xoshiro(100 + s), w); (v.log_volume - exact) / v.log_stderr) for s in 1:50]
