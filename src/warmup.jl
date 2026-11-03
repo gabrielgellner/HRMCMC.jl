@@ -228,8 +228,10 @@ sampler take long steps in thin directions:
   number of constraints.
 - `:barrier`: map the Dikin ellipsoid of the log barrier at its analytic center to the unit
   ball, by damped Newton steps on `k × k` systems, as volesti, dingo and the COBRA Toolbox
-  offer. It is cheaper than `:ellipsoid` with many constraints and rounds less well: the
-  polytope lies within `m` times its ellipsoid, against `k` times for `:ellipsoid`.
+  offer. The polytope lies within `m` times its ellipsoid, against `k` times for
+  `:ellipsoid`, but on food webs it rounded about as well: on one with 1032 dimensions,
+  coordinate hit-and-run and the billiard walk had the same effective samples per step
+  after either, and rounding took 6 s against 126 s for `:ellipsoid`.
 - `:samples`: draw billiard-walk samples and map their principal axes to equal lengths,
   repeatedly, as in multiphase Monte Carlo sampling. Runs one chain per thread and uses
   `rng`, so a seeded result depends on `Threads.nthreads()`.
