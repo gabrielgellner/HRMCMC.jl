@@ -45,10 +45,10 @@ ratios from chains split the rest.
 
 ## Calibration
 
-Over 50 seeds on a 40-dimensional cube, a 20-dimensional simplex, an 8-dimensional
-cross-polytope and a 14-dimensional simplex slice, the z-scores of the log volume had root
-mean square between 0.90 and 1.13, and 46 to 50 of the 50 estimates were within two standard
-errors. The mean z-score was between 0.0 and 0.27: the logarithm of a ratio estimate is
+Over 50 seeds on a 40-dimensional cube, a 20-dimensional simplex, a 14-dimensional simplex
+slice and a 60-dimensional simplex (10 phases), the z-scores of the log volume had root mean
+square between 0.86 and 1.09, and 47 to 49 of the 50 estimates were within two standard
+errors. The mean z-score was between -0.03 and 0.23: the logarithm of a ratio estimate is
 biased by about half its squared relative error, small next to the standard error.
 
 ## Food webs
