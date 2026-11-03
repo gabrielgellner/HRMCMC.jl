@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-11-03
+
+Results of `sample_until_converged` and `volume` differ from 0.4.0 for the same seed. `sample_until_converged` returns a new field `thinning`, and slowly mixing runs keep every `thinning`-th step. `volume` defaults to `n = 500`. `n` below 10 now throws an `ArgumentError`.
+
+### Bug Fixes
+
+- **volume**: Double a phase when its standard error is NaN, and state the first round length (#54)
+- **diagnostics**: Require 10 points per chain, as shorter chains gave NaN ESS and sample_until_converged reported convergence
+
+### Documentation
+
+- **volume**: Report the calibration with a 10-phase simplex (#54)
+- State how the multivariate R̂ grows with dimension and when volume without rounding fails
+
+### Features
+
+- **adaptive**: Set run lengths from the ESS rate, thin stored chains to bound memory, and add a multivariate R̂ (#53)
+
+### Miscellaneous
+
+- **examples**: Pin FoodWebs v0.9.2, which allows PolytopeSamplers 0.4
+
+### Performance
+
+- **volume**: Count every move, continue the pilot chains, split the error as volesti, and test ball points in batches (#54)
+
 ## [0.4.0] - 2026-11-02
 
 ### Breaking Changes
