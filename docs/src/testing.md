@@ -25,7 +25,7 @@ Gaussian) gave 0.73–1.15 for every supported sampler.
 - `test/` (`just ci`): exact moments on squares, simplices, a pentagon and cubes; checks
   adapted from volesti, hopsy, hops and PolyRound; reproducibility; type stability and zero
   allocations of every step (JET and AllocCheck); gradients against finite differences.
-- `test/stress.jl` (`just stress`): R̂ flags chains started near corners; runs doubled until
+- `test/stress.jl` (`just stress`): R̂ flags chains started near corners; runs lengthened until
   R̂ < 1.01 give correct moments on a box of aspect ratio `10⁶`, 560 redundant constraints,
   implicit equalities, a 256-facet cross-polytope, the Birkhoff polytope and a
   200-dimensional simplex; 100 000 steps of every sampler stay inside four polytopes; the

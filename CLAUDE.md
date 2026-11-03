@@ -46,7 +46,7 @@ use is sampling the interaction strengths of food webs consistent with an equili
 - `src/barrier.jl`: `DikinWalk` and `VaidyaWalk`, Metropolis-filtered barrier walks (adapted
   from polytopewalk, whose proposal draws with the wrong Cholesky factor; see the comment
   above `step!`).
-- `src/adaptive.jl`: `sample_until_converged` (chains doubled until ESS and R̂ targets)
+- `src/adaptive.jl`: `sample_until_converged` (chains lengthened until ESS and R̂ targets, thinned to bound memory)
   and `mmcs`.
 - `src/volume.jl`: `volume`, multiphase Monte Carlo with cooling balls (schedule adapted from
   volesti), each ratio from coordinate hit-and-run chains on polytope ∩ ball run to a Monte
@@ -107,7 +107,7 @@ sampler joins the `methods` tuples in `test/sampler.jl`, `test/correctness.jl` a
 `test/stress.jl`.
 
 `test/stress.jl` (`just stress`, about 10 minutes, not part of `just ci`) checks that R̂
-flags chains started near corners, that runs doubled until R̂ < 1.01 give correct moments
+flags chains started near corners, that runs lengthened until R̂ < 1.01 give correct moments
 on hard geometry, and that mixing cost grows with dimension as published (CHRR moves per
 effective sample as n²). Run it after changing a sampler, rounding or diagnostics. Check a new stochastic test under 50 or more
 shifted seeds before trusting it.

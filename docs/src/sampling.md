@@ -82,11 +82,13 @@ least four.
 ## Sampling until converged
 
 [`sample_until_converged`](@ref) automates the usual protocol: run several chains, discard
-the first half as burn-in, and double the length until the targets are met.
+the first half as burn-in, and lengthen them until the targets are met. Each round sets
+the length from the effective samples per point of the last round, and slowly mixing
+chains are thinned so that they keep at most about 20 points per effective sample.
 
 ```@example sampling
 r = sample_until_converged(Xoshiro(2), w, CoordinateHitAndRun(); target_ess = 2_000)
-(; r.converged, r.n, r.diagnostics.min_ess, r.diagnostics.max_rhat)
+(; r.converged, r.n, r.thinning, r.diagnostics.min_ess, r.diagnostics.max_rhat)
 ```
 
 Chains start at random points of the largest ball around the warmup center inside the
@@ -104,3 +106,14 @@ the corners of a 49-dimensional simplex had R̂ above 1.05 after 100 steps for e
 and every run that reached R̂ below 1.01 had means and standard deviations within their
 standard errors of the exact values. A run that stops at `max_n` with R̂ above 1.01 should
 not be used.
+
+R̂ of each coordinate can miss chains that disagree along a direction such as `x₁ - x₂`
+that is narrow compared with the coordinates' ranges. `diagnostics(chains; multivariate =
+true)` adds the multivariate R̂ of Brooks & Gelman (1998), the largest R̂ of any linear
+combination of the coordinates, and `sample_until_converged(...; multivariate = true)` runs
+until it is below `max_rhat` too:
+
+```@example sampling
+r = sample_until_converged(Xoshiro(2), w, CoordinateHitAndRun(); multivariate = true)
+r.diagnostics.multivariate_rhat
+```

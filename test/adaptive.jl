@@ -91,9 +91,10 @@ end
         @test moments_match(r.diagnostics, zeros(10), [200 / sqrt(12); fill(sqrt(1 / 3), 9)])
     end
 
-    @testset "doubling and reproducibility" begin
+    @testset "lengthening and reproducibility" begin
         r = sample_until_converged(Xoshiro(3), w, HitAndRun(); target_ess = 2_000, n = 100)
-        @test r.n >= 400 && ispow2(r.n ÷ 100)
+        @test r.n * r.thinning > 100
+        @test all(==((10, r.n)), size.(r.chains))
         @test sample_until_converged(Xoshiro(3), w, HitAndRun(); target_ess = 2_000, n = 100).chains == r.chains
         @test all(x -> x in skinny, eachcol(reduce(hcat, r.chains)))
     end
@@ -102,8 +103,27 @@ end
         @test_logs (:warn,) match_mode = :any begin
             r = sample_until_converged(Xoshiro(4), w, HitAndRun(); target_ess = 10^6, n = 100, max_n = 200)
             @test !r.converged
-            @test r.n == 200
+            @test r.n * r.thinning == 200
         end
+    end
+
+    @testset "thins slowly mixing chains (#53)" begin
+        # Unthinned hit-and-run in 20 dimensions needs tens of steps per effective sample;
+        # the stored points stay below 20 per effective sample after the last round's
+        # growth (under 19 over 60 seeds)
+        cube = warmup(Polytope(zeros(20), ones(20)))
+        r = sample_until_converged(Xoshiro(1), cube, HitAndRun())
+        @test r.converged
+        @test r.thinning > 1
+        @test r.n * 4 / r.diagnostics.min_ess < 40
+        @test moments_match(r.diagnostics, fill(0.5, 20), fill(sqrt(1 / 12), 20))
+    end
+
+    @testset "multivariate R̂ (#53)" begin
+        r = sample_until_converged(Xoshiro(1), w, CoordinateHitAndRun(); target_ess = 400, multivariate = true)
+        @test r.converged
+        @test r.diagnostics.multivariate_rhat < 1.01
+        @test isnan(sample_until_converged(Xoshiro(1), w, CoordinateHitAndRun(); target_ess = 400).diagnostics.multivariate_rhat)
     end
 
     @testset "argument checks" begin
